@@ -50,6 +50,25 @@ def init_db(db_path: Path) -> None:
         )
         con.execute(
             """
+            CREATE TABLE IF NOT EXISTS signals (
+              signal_id      VARCHAR,
+              signal_type    VARCHAR,
+              source         VARCHAR,
+              entity_type    VARCHAR,
+              entity_id      VARCHAR,
+              ts_start       TIMESTAMP,
+              ts_end         TIMESTAMP,
+              severity_score DOUBLE,
+              summary        VARCHAR,
+              details_json   VARCHAR,
+              ingested_at    TIMESTAMP,
+              computed_at    TIMESTAMP,
+              raw_paths      VARCHAR
+            );
+            """
+        )
+        con.execute(
+            """
             CREATE TABLE IF NOT EXISTS eurostat_stats (
               source       VARCHAR,
               dataset_id   VARCHAR,
@@ -792,6 +811,43 @@ def upsert_ripe_atlas_probes(db_path: Path, rows: Iterable[Dict[str, Any]]) -> i
                     r.get("last_connected"),
                     r.get("raw_json"),
                     r["ingested_at"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_signals(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Insert new rows; overwrite existing (signal_id) by delete+insert.
+
+    Returns count of inserted/updated rows.
+    """
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute("DELETE FROM signals WHERE signal_id = ?", [r["signal_id"]])
+            con.execute(
+                """
+                INSERT INTO signals VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["signal_id"],
+                    r["signal_type"],
+                    r["source"],
+                    r.get("entity_type"),
+                    r.get("entity_id"),
+                    r.get("ts_start"),
+                    r.get("ts_end"),
+                    r.get("severity_score"),
+                    r.get("summary"),
+                    r.get("details_json"),
+                    r.get("ingested_at"),
+                    r.get("computed_at"),
+                    r.get("raw_paths"),
                 ],
             )
             inserted += 1

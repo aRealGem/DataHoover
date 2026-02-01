@@ -20,6 +20,7 @@ from .connectors.caida_ioda import ingest_ioda_events
 from .connectors.ripe_ris_live import ingest_ripe_ris_live
 from .connectors.ripe_atlas_probes import ingest_ripe_atlas_probes
 from .storage.duckdb_store import show_latest
+from .signals import compute_signals, alert_signals
 from .snapshot import snapshot_zip, snapshot_parquet, default_snapshot_stamp
 
 
@@ -121,6 +122,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_atlas.add_argument("--source", type=str, default="ripe_atlas_probes", help="Source name from sources.toml")
     p_atlas.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
     p_atlas.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+
+    p_signals = sub.add_parser("compute-signals", help="Compute derived signals from ingested data")
+    p_signals.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+    p_signals.add_argument("--since", type=str, default="24h", help="Lookback window (e.g., 24h, 7d)")
+    p_signals.add_argument("--usgs-min-mag", type=float, default=5.0, help="Minimum USGS magnitude")
+    p_signals.add_argument(
+        "--gdacs-min-severity", type=float, default=0.6, help="Minimum GDACS severity (0-1)"
+    )
+
+    p_alert = sub.add_parser("alert", help="Print highest severity signals by type")
+    p_alert.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+    p_alert.add_argument("--since", type=str, default="24h", help="Lookback window (e.g., 24h, 7d)")
+    p_alert.add_argument("--limit", type=int, default=5, help="Max signals per type")
 
     p_latest = sub.add_parser("show-latest", help="Show latest ingested earthquake events")
     p_latest.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
@@ -271,6 +285,20 @@ def main(argv: list[str] | None = None) -> int:
             data_dir=args.data_dir,
             db_path=args.db,
         )
+        return 0
+
+    if args.cmd == "compute-signals":
+        inserted = compute_signals(
+            db_path=str(args.db),
+            since=args.since,
+            min_magnitude=args.usgs_min_mag,
+            gdacs_min_severity=args.gdacs_min_severity,
+        )
+        print(f"Computed signals inserted_or_updated={inserted}")
+        return 0
+
+    if args.cmd == "alert":
+        alert_signals(db_path=str(args.db), since=args.since, limit=args.limit)
         return 0
 
     if args.cmd == "show-latest":
