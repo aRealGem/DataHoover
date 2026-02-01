@@ -1,0 +1,24 @@
+{
+  "results": [
+    {
+      "measurement_id": "m-1",
+      "test_name": "web_connectivity",
+      "probe_cc": "US",
+      "measurement_start_time": "2026-01-29T10:00:00Z",
+      "input": "http://example.com",
+      "anomaly": false,
+      "confirmed": false,
+      "scores": {"blocking_general": 0.1}
+    },
+    {
+      "measurement_id": "m-2",
+      "test_name": "dns_check",
+      "probe_cc": "US",
+      "measurement_start_time": "2026-01-29T11:00:00Z",
+      "input": "example.org",
+      "anomaly": true,
+      "confirmed": true,
+      "scores": {"blocking_general": 0.9}
+    }
+  ]
+}

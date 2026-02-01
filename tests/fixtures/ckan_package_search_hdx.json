@@ -1,0 +1,31 @@
+{
+  "help": "https://data.humdata.org/api/3/action/help_show?name=package_search",
+  "success": true,
+  "result": {
+    "count": 2,
+    "results": [
+      {
+        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "name": "cholera-cases-2024",
+        "title": "Cholera cases 2024",
+        "organization": {"name": "who", "title": "World Health Organization"},
+        "metadata_created": "2024-02-01T08:00:00.000000",
+        "metadata_modified": "2024-03-01T08:00:00.000000",
+        "license_id": "cc-by-igo",
+        "resources": [{"id": "r1"}],
+        "tags": [{"name": "cholera"}, {"name": "health"}]
+      },
+      {
+        "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "name": "cholera-outbreaks-2023",
+        "title": "Cholera outbreaks 2023",
+        "organization": {"name": "unicef", "title": "UNICEF"},
+        "metadata_created": "2023-05-10T12:00:00.000000",
+        "metadata_modified": "2023-06-15T12:00:00.000000",
+        "license_id": "other-open",
+        "resources": [{"id": "r2"}, {"id": "r3"}],
+        "tags": [{"name": "cholera"}]
+      }
+    ]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "total_count": 2,
+  "results": [
+    {
+      "recordid": "rec-1",
+      "fields": {
+        "city": "Testville",
+        "country": "US",
+        "population": 1000
+      }
+    },
+    {
+      "recordid": "rec-2",
+      "fields": {
+        "city": "Exampletown",
+        "country": "FR",
+        "population": 2000
+      }
+    }
+  ]
+}

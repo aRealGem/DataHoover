@@ -1,0 +1,40 @@
+[
+  {
+    "page": 1,
+    "pages": 1,
+    "per_page": 50,
+    "total": 3
+  },
+  [
+    {
+      "indicator": {"id": "NY.GDP.MKTP.CN", "value": "GDP (current LCU)"},
+      "country": {"id": "USA", "value": "United States"},
+      "countryiso3code": "USA",
+      "date": "2022",
+      "value": 25000000,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 0
+    },
+    {
+      "indicator": {"id": "GC.XPN.INTP.CN", "value": "Interest payments (current LCU)"},
+      "country": {"id": "USA", "value": "United States"},
+      "countryiso3code": "USA",
+      "date": "2022",
+      "value": 125000,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 0
+    },
+    {
+      "indicator": {"id": "GC.REV.XGRT.GD.ZS", "value": "Revenue excluding grants (% of GDP)"},
+      "country": {"id": "USA", "value": "United States"},
+      "countryiso3code": "USA",
+      "date": "2022",
+      "value": 20.5,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    }
+  ]
+]

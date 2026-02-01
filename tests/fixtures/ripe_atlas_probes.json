@@ -1,0 +1,27 @@
+{
+  "count": 2,
+  "results": [
+    {
+      "id": 1001,
+      "country_code": "US",
+      "status": "Connected",
+      "asn_v4": 7922,
+      "asn_v6": 7922,
+      "latitude": 37.7749,
+      "longitude": -122.4194,
+      "first_connected": "2025-12-01T00:00:00Z",
+      "last_connected": "2026-01-30T18:00:00Z"
+    },
+    {
+      "id": 1002,
+      "country_code": "NL",
+      "status": "Disconnected",
+      "asn_v4": 3333,
+      "asn_v6": 3333,
+      "latitude": 52.3676,
+      "longitude": 4.9041,
+      "first_connected": 1700000000,
+      "last_connected": 1700003600
+    }
+  ]
+}

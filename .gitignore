@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.pytest_cache/
+.mypy_cache/
+
+# Data outputs
+data/raw/
+data/state/
+data/warehouse.duckdb
+data/*.duckdb
+data/snapshots/
+
+# OS / editor
+.DS_Store
+.vscode/
+.cursor/
+
+# Local virtualenvs
+\#/
+needed/
+only/
+
+# Local scratch/exports
+if/
+data-hoover.zip

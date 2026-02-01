@@ -1,0 +1,59 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.1",
+      "type": "Feature",
+      "properties": {
+        "id": "urn:oid:2.49.0.1.840.0.1",
+        "sent": "2026-01-29T12:00:00-05:00",
+        "effective": "2026-01-29T11:55:00-05:00",
+        "expires": "2026-01-29T18:00:00-05:00",
+        "severity": "Moderate",
+        "urgency": "Expected",
+        "certainty": "Observed",
+        "event": "Winter Weather Advisory",
+        "headline": "Winter Weather Advisory issued January 29 at 11:55AM EST until January 29 at 6:00PM EST by NWS",
+        "areaDesc": "Some County; Another County",
+        "instruction": "Slow down.",
+        "senderName": "NWS Someplace",
+        "source": "NWSON"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-80.0, 35.0],
+            [-79.0, 35.0],
+            [-79.0, 36.0],
+            [-80.0, 36.0],
+            [-80.0, 35.0]
+          ]
+        ]
+      },
+      "bbox": [-80.0, 35.0, -79.0, 36.0]
+    },
+    {
+      "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.2",
+      "type": "Feature",
+      "properties": {
+        "id": "urn:oid:2.49.0.1.840.0.2",
+        "sent": "2026-01-29T09:00:00-06:00",
+        "effective": "2026-01-29T09:00:00-06:00",
+        "expires": "2026-01-29T12:00:00-06:00",
+        "severity": "Minor",
+        "urgency": "Immediate",
+        "certainty": "Likely",
+        "event": "Dense Fog Advisory",
+        "headline": "Dense Fog Advisory issued January 29 at 9:00AM CST until January 29 at 12:00PM CST by NWS",
+        "areaDesc": "Another County",
+        "senderName": "NWS Elsewhere",
+        "source": "NWS"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-90.0, 40.0]
+      }
+    }
+  ]
+}

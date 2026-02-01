@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>GDACS Alerts</title>
+    <link>https://www.gdacs.org</link>
+    <description>GDACS Alerts Feed</description>
+    <item>
+      <guid isPermaLink="false">gdacs:123</guid>
+      <title>Earthquake - M5.0 - Test Region</title>
+      <link>https://www.gdacs.org/report.aspx?eventid=123</link>
+      <pubDate>Thu, 29 Jan 2026 12:00:00 GMT</pubDate>
+      <description>Test summary for earthquake event.</description>
+    </item>
+    <item>
+      <guid>gdacs:456</guid>
+      <title>Flood - Test Country</title>
+      <link>https://www.gdacs.org/report.aspx?eventid=456</link>
+      <pubDate>Thu, 29 Jan 2026 13:00:00 GMT</pubDate>
+      <description>Second summary for flood event.</description>
+    </item>
+  </channel>
+</rss>

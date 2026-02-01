@@ -1,0 +1,51 @@
+---
+description: Core operating rules for DataHoover (always apply).
+globs:
+alwaysApply: true
+---
+
+# DataHoover – Core Rules (Always Apply)
+
+## Prime directive
+Correctness > reproducibility > speed. Small diffs. Run tests after each change.
+
+## Repo invariants
+- Never commit generated data artifacts:
+  - data/raw/**, data/state/**, *.duckdb, *.zip snapshots
+- Local-first storage:
+  - Raw snapshots -> data/raw/<source>/<timestamp>.<ext>
+  - State/cache -> data/state/<source>.json
+  - Normalized tables -> data/warehouse.duckdb (DuckDB)
+
+## Connector contract (for every new source)
+- Implement a connector module under src/datahoover/ (e.g., src/datahoover/connectors/<name>.py).
+- Network hygiene:
+  - Always set timeouts and a clear User-Agent.
+  - Use conditional requests (ETag / If-None-Match or Last-Modified / If-Modified-Since) when possible.
+- Idempotent writes:
+  - The same ingest run should not duplicate rows.
+  - Prefer upsert semantics keyed by (source, natural_id, observation_time).
+
+## Testing rules
+- Tests MUST NOT hit the network. Use mocking (httpx mocking) for fetchers.
+- Keep a minimal smoke test for each connector’s normalization/parsing.
+
+## Operational workflow
+- After changes:
+  - run: python -m pytest
+  - run one ingest command end-to-end
+  - confirm: hoover show-latest --limit 5
+
+## Terminal permissions policy (DataHoover)
+
+- Default: run commands without extra permissions (sandbox).
+- If a command needs internet (pip installs, hoover ingest, curl/wget to known URLs):
+  request ONLY: required_permissions: ["network"].
+- If a command modifies git state (.git) such as commit/checkout/merge/pull/fetch:
+  request ONLY what’s needed: ["git_write"] and add ["network"] only if remote is contacted.
+- Never request ["all"] unless:
+  (a) the sandbox prevents required functionality and
+  (b) you explain exactly why, and
+  (c) you show the full command for explicit approval.
+- Never run risky commands (rm -rf, sudo, curl|sh) without explicit user confirmation.
+

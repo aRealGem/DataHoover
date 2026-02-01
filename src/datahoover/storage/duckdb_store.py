@@ -1,0 +1,852 @@
+from __future__ import annotations
+
+import duckdb
+from datetime import datetime
+from pathlib import Path
+from typing import Iterable, Dict, Any
+
+
+def init_db(db_path: Path) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect(str(db_path))
+    try:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS usgs_earthquakes (
+              source       VARCHAR,
+              feed_url      VARCHAR,
+              event_id      VARCHAR,
+              magnitude     DOUBLE,
+              place         VARCHAR,
+              time_utc      TIMESTAMP,
+              updated_utc   TIMESTAMP,
+              url           VARCHAR,
+              detail        VARCHAR,
+              tsunami       INTEGER,
+              status        VARCHAR,
+              event_type    VARCHAR,
+              longitude     DOUBLE,
+              latitude      DOUBLE,
+              depth_km      DOUBLE,
+              raw_json      VARCHAR,
+              ingested_at   TIMESTAMP
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ingest_runs (
+              run_id     VARCHAR,
+              source     VARCHAR,
+              feed_url   VARCHAR,
+              started_at TIMESTAMP,
+              ended_at   TIMESTAMP,
+              status     VARCHAR,
+              n_total    INTEGER,
+              n_new      INTEGER,
+              message    VARCHAR
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS eurostat_stats (
+              source       VARCHAR,
+              dataset_id   VARCHAR,
+              freq         VARCHAR,
+              unit         VARCHAR,
+              na_item      VARCHAR,
+              geo          VARCHAR,
+              time_period  VARCHAR,
+              value        DOUBLE,
+              extra_dims   VARCHAR,
+              ingested_at  TIMESTAMP
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS openfema_disaster_declarations (
+              source             VARCHAR,
+              declaration_id     VARCHAR,
+              disaster_number    INTEGER,
+              state              VARCHAR,
+              declaration_type   VARCHAR,
+              declaration_date   TIMESTAMP,
+              incident_type      VARCHAR,
+              declaration_title  VARCHAR,
+              incident_begin_date TIMESTAMP,
+              incident_end_date  TIMESTAMP,
+              raw_json           VARCHAR,
+              ingested_at        TIMESTAMP
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS nws_alerts (
+              source        VARCHAR,
+              feed_url      VARCHAR,
+              alert_id      VARCHAR,
+              sent          TIMESTAMP,
+              effective     TIMESTAMP,
+              expires       TIMESTAMP,
+              severity      VARCHAR,
+              urgency       VARCHAR,
+              certainty     VARCHAR,
+              event         VARCHAR,
+              headline      VARCHAR,
+              area_desc     VARCHAR,
+              instruction   VARCHAR,
+              sender_name   VARCHAR,
+              alert_source  VARCHAR,
+              bbox_min_lon  DOUBLE,
+              bbox_min_lat  DOUBLE,
+              bbox_max_lon  DOUBLE,
+              bbox_max_lat  DOUBLE,
+              centroid_lon  DOUBLE,
+              centroid_lat  DOUBLE,
+              raw_json      VARCHAR,
+              ingested_at   TIMESTAMP
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS gdacs_alerts (
+              source       VARCHAR,
+              feed_url     VARCHAR,
+              entry_id     VARCHAR,
+              title        VARCHAR,
+              published    TIMESTAMP,
+              updated      TIMESTAMP,
+              link         VARCHAR,
+              summary      VARCHAR,
+              event_type   VARCHAR,
+              raw_json     VARCHAR,
+              ingested_at  TIMESTAMP
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS worldbank_indicators (
+              source        VARCHAR,
+              feed_url      VARCHAR,
+              series_id     VARCHAR,
+              country_id    VARCHAR,
+              country_name  VARCHAR,
+              year          VARCHAR,
+              value         DOUBLE,
+              unit          VARCHAR,
+              raw_json      VARCHAR,
+              ingested_at   TIMESTAMP
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ckan_packages (
+              source             VARCHAR,
+              feed_url           VARCHAR,
+              package_id         VARCHAR,
+              name               VARCHAR,
+              title              VARCHAR,
+              organization       VARCHAR,
+              metadata_created   TIMESTAMP,
+              metadata_modified  TIMESTAMP,
+              license_id         VARCHAR,
+              num_resources      INTEGER,
+              tags               VARCHAR,
+              raw_json           VARCHAR,
+              ingested_at        TIMESTAMP
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS socrata_records (
+              source        VARCHAR,
+              feed_url      VARCHAR,
+              record_hash   VARCHAR,
+              retrieved_at  TIMESTAMP,
+              raw_json      VARCHAR,
+              ingested_at   TIMESTAMP
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS opendatasoft_records (
+              source        VARCHAR,
+              feed_url      VARCHAR,
+              record_id     VARCHAR,
+              field_summary VARCHAR,
+              raw_json      VARCHAR,
+              ingested_at   TIMESTAMP
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS gdelt_docs (
+              source            VARCHAR,
+              feed_url          VARCHAR,
+              document_id       VARCHAR,
+              url               VARCHAR,
+              title             VARCHAR,
+              seendate          VARCHAR,
+              source_country    VARCHAR,
+              source_collection VARCHAR,
+              tone              VARCHAR,
+              raw_json          VARCHAR,
+              ingested_at       TIMESTAMP
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ooni_measurements (
+              source                 VARCHAR,
+              feed_url               VARCHAR,
+              measurement_id         VARCHAR,
+              test_name              VARCHAR,
+              probe_cc               VARCHAR,
+              measurement_start_time VARCHAR,
+              input                  VARCHAR,
+              anomaly                BOOLEAN,
+              confirmed              BOOLEAN,
+              scores                 VARCHAR,
+              raw_json               VARCHAR,
+              ingested_at            TIMESTAMP
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS caida_ioda_events (
+              source        VARCHAR,
+              feed_url      VARCHAR,
+              event_id      VARCHAR,
+              start_time    VARCHAR,
+              end_time      VARCHAR,
+              country       VARCHAR,
+              asn           VARCHAR,
+              signal_type   VARCHAR,
+              severity      VARCHAR,
+              raw_json      VARCHAR,
+              ingested_at   TIMESTAMP
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ripe_ris_messages (
+              source        VARCHAR,
+              feed_url      VARCHAR,
+              msg_id        VARCHAR,
+              timestamp     TIMESTAMP,
+              prefix        VARCHAR,
+              asn           VARCHAR,
+              path          VARCHAR,
+              message_type  VARCHAR,
+              raw_json      VARCHAR,
+              ingested_at   TIMESTAMP
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ripe_atlas_probes (
+              source          VARCHAR,
+              feed_url        VARCHAR,
+              probe_id        VARCHAR,
+              country_code    VARCHAR,
+              status          VARCHAR,
+              asn_v4          VARCHAR,
+              asn_v6          VARCHAR,
+              latitude        DOUBLE,
+              longitude       DOUBLE,
+              first_connected TIMESTAMP,
+              last_connected  TIMESTAMP,
+              raw_json        VARCHAR,
+              ingested_at     TIMESTAMP
+            );
+            """
+        )
+    finally:
+        con.close()
+
+
+def upsert_usgs_events(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Insert new rows; overwrite existing (source,event_id) by delete+insert.
+
+    Returns count of inserted/updated rows.
+    """
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM usgs_earthquakes WHERE source = ? AND event_id = ?",
+                [r["source"], r["event_id"]],
+            )
+            con.execute(
+                """
+                INSERT INTO usgs_earthquakes VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["feed_url"],
+                    r["event_id"],
+                    r["magnitude"],
+                    r["place"],
+                    r["time_utc"],
+                    r["updated_utc"],
+                    r["url"],
+                    r["detail"],
+                    r["tsunami"],
+                    r["status"],
+                    r["event_type"],
+                    r["longitude"],
+                    r["latitude"],
+                    r["depth_km"],
+                    r["raw_json"],
+                    r["ingested_at"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_eurostat_stats(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Insert new rows; overwrite existing by dimensional key."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                """
+                DELETE FROM eurostat_stats
+                WHERE source = ? AND dataset_id = ? AND freq IS NOT DISTINCT FROM ?
+                  AND unit IS NOT DISTINCT FROM ? AND na_item IS NOT DISTINCT FROM ?
+                  AND geo IS NOT DISTINCT FROM ? AND time_period IS NOT DISTINCT FROM ?
+                  AND extra_dims IS NOT DISTINCT FROM ?
+                """,
+                [
+                    r["source"],
+                    r["dataset_id"],
+                    r.get("freq"),
+                    r.get("unit"),
+                    r.get("na_item"),
+                    r.get("geo"),
+                    r.get("time_period"),
+                    r.get("extra_dims"),
+                ],
+            )
+            con.execute(
+                """
+                INSERT INTO eurostat_stats VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["dataset_id"],
+                    r.get("freq"),
+                    r.get("unit"),
+                    r.get("na_item"),
+                    r.get("geo"),
+                    r.get("time_period"),
+                    r.get("value"),
+                    r.get("extra_dims"),
+                    r["ingested_at"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_openfema_disaster_declarations(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Insert new rows; overwrite existing by declaration id."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM openfema_disaster_declarations WHERE source = ? AND declaration_id = ?",
+                [r["source"], r["declaration_id"]],
+            )
+            con.execute(
+                """
+                INSERT INTO openfema_disaster_declarations VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["declaration_id"],
+                    r.get("disaster_number"),
+                    r.get("state"),
+                    r.get("declaration_type"),
+                    r.get("declaration_date"),
+                    r.get("incident_type"),
+                    r.get("declaration_title"),
+                    r.get("incident_begin_date"),
+                    r.get("incident_end_date"),
+                    r.get("raw_json"),
+                    r["ingested_at"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_nws_alerts(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Insert new rows; overwrite existing by alert id."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM nws_alerts WHERE source = ? AND alert_id = ?",
+                [r["source"], r["alert_id"]],
+            )
+            con.execute(
+                """
+                INSERT INTO nws_alerts VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["feed_url"],
+                    r["alert_id"],
+                    r.get("sent"),
+                    r.get("effective"),
+                    r.get("expires"),
+                    r.get("severity"),
+                    r.get("urgency"),
+                    r.get("certainty"),
+                    r.get("event"),
+                    r.get("headline"),
+                    r.get("area_desc"),
+                    r.get("instruction"),
+                    r.get("sender_name"),
+                    r.get("alert_source"),
+                    r.get("bbox_min_lon"),
+                    r.get("bbox_min_lat"),
+                    r.get("bbox_max_lon"),
+                    r.get("bbox_max_lat"),
+                    r.get("centroid_lon"),
+                    r.get("centroid_lat"),
+                    r.get("raw_json"),
+                    r["ingested_at"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_gdacs_alerts(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Insert new rows; overwrite existing by entry id."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM gdacs_alerts WHERE source = ? AND entry_id = ?",
+                [r["source"], r["entry_id"]],
+            )
+            con.execute(
+                """
+                INSERT INTO gdacs_alerts VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["feed_url"],
+                    r["entry_id"],
+                    r.get("title"),
+                    r.get("published"),
+                    r.get("updated"),
+                    r.get("link"),
+                    r.get("summary"),
+                    r.get("event_type"),
+                    r.get("raw_json"),
+                    r["ingested_at"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_worldbank_indicators(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Insert new rows; overwrite existing by series/country/year."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                """
+                DELETE FROM worldbank_indicators
+                WHERE source = ? AND series_id = ? AND country_id = ? AND year = ?
+                """,
+                [r["source"], r["series_id"], r["country_id"], r["year"]],
+            )
+            con.execute(
+                """
+                INSERT INTO worldbank_indicators VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["feed_url"],
+                    r["series_id"],
+                    r["country_id"],
+                    r.get("country_name"),
+                    r.get("year"),
+                    r.get("value"),
+                    r.get("unit"),
+                    r.get("raw_json"),
+                    r["ingested_at"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_ckan_packages(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Insert new rows; overwrite existing by package id."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM ckan_packages WHERE source = ? AND package_id = ?",
+                [r["source"], r["package_id"]],
+            )
+            con.execute(
+                """
+                INSERT INTO ckan_packages VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["feed_url"],
+                    r["package_id"],
+                    r.get("name"),
+                    r.get("title"),
+                    r.get("organization"),
+                    r.get("metadata_created"),
+                    r.get("metadata_modified"),
+                    r.get("license_id"),
+                    r.get("num_resources"),
+                    r.get("tags"),
+                    r.get("raw_json"),
+                    r["ingested_at"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_socrata_records(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Insert new rows; overwrite existing by record hash."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM socrata_records WHERE source = ? AND record_hash = ?",
+                [r["source"], r["record_hash"]],
+            )
+            con.execute(
+                """
+                INSERT INTO socrata_records VALUES
+                  (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["feed_url"],
+                    r["record_hash"],
+                    r.get("retrieved_at"),
+                    r.get("raw_json"),
+                    r["ingested_at"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_opendatasoft_records(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Insert new rows; overwrite existing by record id."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM opendatasoft_records WHERE source = ? AND record_id = ?",
+                [r["source"], r["record_id"]],
+            )
+            con.execute(
+                """
+                INSERT INTO opendatasoft_records VALUES
+                  (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["feed_url"],
+                    r["record_id"],
+                    r.get("field_summary"),
+                    r.get("raw_json"),
+                    r["ingested_at"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_gdelt_docs(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Insert new rows; overwrite existing by document id."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM gdelt_docs WHERE source = ? AND document_id = ?",
+                [r["source"], r["document_id"]],
+            )
+            con.execute(
+                """
+                INSERT INTO gdelt_docs VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["feed_url"],
+                    r["document_id"],
+                    r.get("url"),
+                    r.get("title"),
+                    r.get("seendate"),
+                    r.get("source_country"),
+                    r.get("source_collection"),
+                    r.get("tone"),
+                    r.get("raw_json"),
+                    r["ingested_at"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_ooni_measurements(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Insert new rows; overwrite existing by measurement id."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM ooni_measurements WHERE source = ? AND measurement_id = ?",
+                [r["source"], r["measurement_id"]],
+            )
+            con.execute(
+                """
+                INSERT INTO ooni_measurements VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["feed_url"],
+                    r["measurement_id"],
+                    r.get("test_name"),
+                    r.get("probe_cc"),
+                    r.get("measurement_start_time"),
+                    r.get("input"),
+                    r.get("anomaly"),
+                    r.get("confirmed"),
+                    r.get("scores"),
+                    r.get("raw_json"),
+                    r["ingested_at"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_ioda_events(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Insert new rows; overwrite existing by event id."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM caida_ioda_events WHERE source = ? AND event_id = ?",
+                [r["source"], r["event_id"]],
+            )
+            con.execute(
+                """
+                INSERT INTO caida_ioda_events VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["feed_url"],
+                    r["event_id"],
+                    r.get("start_time"),
+                    r.get("end_time"),
+                    r.get("country"),
+                    r.get("asn"),
+                    r.get("signal_type"),
+                    r.get("severity"),
+                    r.get("raw_json"),
+                    r["ingested_at"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_ripe_ris_messages(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Insert new rows; overwrite existing by msg id."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM ripe_ris_messages WHERE source = ? AND msg_id = ?",
+                [r["source"], r["msg_id"]],
+            )
+            con.execute(
+                """
+                INSERT INTO ripe_ris_messages VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["feed_url"],
+                    r["msg_id"],
+                    r.get("timestamp"),
+                    r.get("prefix"),
+                    r.get("asn"),
+                    r.get("path"),
+                    r.get("message_type"),
+                    r.get("raw_json"),
+                    r["ingested_at"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_ripe_atlas_probes(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Insert new rows; overwrite existing by probe id."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM ripe_atlas_probes WHERE source = ? AND probe_id = ?",
+                [r["source"], r["probe_id"]],
+            )
+            con.execute(
+                """
+                INSERT INTO ripe_atlas_probes VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["feed_url"],
+                    r["probe_id"],
+                    r.get("country_code"),
+                    r.get("status"),
+                    r.get("asn_v4"),
+                    r.get("asn_v6"),
+                    r.get("latitude"),
+                    r.get("longitude"),
+                    r.get("first_connected"),
+                    r.get("last_connected"),
+                    r.get("raw_json"),
+                    r["ingested_at"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def log_run(
+    db_path: Path,
+    *,
+    run_id: str,
+    source: str,
+    feed_url: str,
+    started_at: datetime,
+    ended_at: datetime,
+    status: str,
+    n_total: int,
+    n_new: int,
+    message: str,
+) -> None:
+    con = duckdb.connect(str(db_path))
+    try:
+        con.execute(
+            """
+            INSERT INTO ingest_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [run_id, source, feed_url, started_at, ended_at, status, n_total, n_new, message],
+        )
+    finally:
+        con.close()
+
+
+def show_latest(*, db_path: Path, limit: int = 10) -> None:
+    con = duckdb.connect(str(db_path))
+    try:
+        rows = con.execute(
+            """
+            SELECT
+              time_utc,
+              magnitude,
+              place,
+              url
+            FROM usgs_earthquakes
+            ORDER BY time_utc DESC NULLS LAST
+            LIMIT ?
+            """,
+            [limit],
+        ).fetchall()
+
+        if not rows:
+            print("No rows found yet. Run: hoover ingest-usgs")
+            return
+
+        for (t, mag, place, url) in rows:
+            print(f"{t} | M{mag} | {place} | {url}")
+    finally:
+        con.close()

@@ -1,0 +1,20 @@
+{
+  "events": [
+    {
+      "event_id": "e-1",
+      "start_time": "2026-01-29T00:00:00Z",
+      "end_time": "2026-01-29T06:00:00Z",
+      "country": "US",
+      "signal": "bgp",
+      "severity": 0.7
+    },
+    {
+      "event_id": "e-2",
+      "start_time": "2026-01-29T03:00:00Z",
+      "end_time": "2026-01-29T05:00:00Z",
+      "asn": "AS12345",
+      "signal": "dns",
+      "severity": 0.4
+    }
+  ]
+}

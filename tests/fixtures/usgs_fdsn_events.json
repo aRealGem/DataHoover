@@ -1,0 +1,48 @@
+{
+  "type": "FeatureCollection",
+  "metadata": {
+    "generated": 1700000000000,
+    "title": "USGS FDSN Events",
+    "count": 2
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "id": "us7000abcd",
+      "properties": {
+        "mag": 5.1,
+        "place": "100 km SE of Testville",
+        "time": 1700000001000,
+        "updated": 1700000002000,
+        "url": "https://earthquake.usgs.gov/earthquakes/eventpage/us7000abcd",
+        "detail": "https://earthquake.usgs.gov/fdsnws/event/1/query?eventid=us7000abcd",
+        "tsunami": 0,
+        "status": "reviewed",
+        "type": "earthquake"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-122.5, 37.7, 8.1]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "us7000wxyz",
+      "properties": {
+        "mag": 4.6,
+        "place": "50 km NW of Sampletown",
+        "time": 1700000101000,
+        "updated": 1700000102000,
+        "url": "https://earthquake.usgs.gov/earthquakes/eventpage/us7000wxyz",
+        "detail": "https://earthquake.usgs.gov/fdsnws/event/1/query?eventid=us7000wxyz",
+        "tsunami": 0,
+        "status": "reviewed",
+        "type": "earthquake"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [140.7, 36.3, 12.4]
+      }
+    }
+  ]
+}

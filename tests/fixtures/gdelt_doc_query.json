@@ -1,0 +1,20 @@
+{
+  "articles": [
+    {
+      "url": "https://example.com/a",
+      "title": "Democracy and Elections",
+      "seendate": "20240130120000",
+      "sourcecountry": "US",
+      "sourcecollection": "1",
+      "tone": "1.2"
+    },
+    {
+      "url": "https://example.com/b",
+      "title": "Democracy in Practice",
+      "seendate": "20240130110000",
+      "sourcecountry": "GB",
+      "sourcecollection": "1",
+      "tone": "-0.5"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+---
+description: Source roadmap/backlog. Use when planning new connectors or prioritizing ingestion work.
+globs:
+alwaysApply: false
+---
+
+# Source roadmap
+
+When adding new connectors:
+1) Consult @docs/sources_backlog.md
+2) Add/modify sources.toml entries
+3) Implement the connector module
+4) Add a non-network unit test for parsing/normalization
+5) Run end-to-end ingest once + show-latest
+
+If the @docs include doesn’t work, open docs/sources_backlog.md and attach it explicitly in chat.
