@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional, List
 import httpx
 
 from ..sources import load_sources, Source
+from ._retry import fetch_with_retry
 
 
 @dataclass(frozen=True)
@@ -127,7 +128,9 @@ def ingest_gdelt_doc_query(*, config_path: Path, source_name: str, data_dir: Pat
     run_id = str(uuid.uuid4())
 
     try:
-        fr = fetch_gdelt_docs_json(source.url, etag=state.get("etag"), last_modified=state.get("last_modified"))
+        fr = fetch_with_retry(
+            lambda: fetch_gdelt_docs_json(source.url, etag=state.get("etag"), last_modified=state.get("last_modified"))
+        )
         init_db(db_path)
 
         if fr.status_code == 304:

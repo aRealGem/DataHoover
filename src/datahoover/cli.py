@@ -19,6 +19,7 @@ from .connectors.ooni_measurements import ingest_ooni_measurements
 from .connectors.caida_ioda import ingest_ioda_events
 from .connectors.ripe_ris_live import ingest_ripe_ris_live
 from .connectors.ripe_atlas_probes import ingest_ripe_atlas_probes
+from .connectors.twelvedata_time_series import ingest_twelvedata_time_series
 from .storage.duckdb_store import show_latest
 from .signals import compute_signals, alert_signals
 from .snapshot import snapshot_zip, snapshot_parquet, default_snapshot_stamp
@@ -122,6 +123,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_atlas.add_argument("--source", type=str, default="ripe_atlas_probes", help="Source name from sources.toml")
     p_atlas.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
     p_atlas.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+
+    p_twelvedata = sub.add_parser("ingest-twelvedata", help="Ingest Twelve Data time series into DuckDB")
+    p_twelvedata.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
+    p_twelvedata.add_argument("--source", type=str, default="twelvedata_watchlist_daily", help="Source name from sources.toml")
+    p_twelvedata.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
+    p_twelvedata.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
 
     p_signals = sub.add_parser("compute-signals", help="Compute derived signals from ingested data")
     p_signals.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
@@ -280,6 +287,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "ingest-ripe-atlas":
         ingest_ripe_atlas_probes(
+            config_path=args.config,
+            source_name=args.source,
+            data_dir=args.data_dir,
+            db_path=args.db,
+        )
+        return 0
+
+    if args.cmd == "ingest-twelvedata":
+        ingest_twelvedata_time_series(
             config_path=args.config,
             source_name=args.source,
             data_dir=args.data_dir,

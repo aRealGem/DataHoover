@@ -24,10 +24,15 @@ if [[ "${1:-}" == "--all" ]]; then
     "ingest-ioda --source caida_ioda_recent"
     "ingest-ripe-ris --source ripe_ris_live_10s"
     "ingest-ripe-atlas --source ripe_atlas_probes"
+    "ingest-twelvedata --source twelvedata_watchlist_daily"
   )
   for cmd in "${commands[@]}"; do
     echo "==> $cmd"
-    PYTHONPATH="$PYTHONPATH" "$PYTHON_BIN" -m datahoover.cli $cmd "${COMMON_ARGS[@]}"
+    if [[ ${#COMMON_ARGS[@]} -gt 0 ]]; then
+      PYTHONPATH="$PYTHONPATH" "$PYTHON_BIN" -m datahoover.cli $cmd "${COMMON_ARGS[@]}"
+    else
+      PYTHONPATH="$PYTHONPATH" "$PYTHON_BIN" -m datahoover.cli $cmd
+    fi
   done
   exit 0
 fi

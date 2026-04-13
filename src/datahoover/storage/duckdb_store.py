@@ -231,7 +231,7 @@ def init_db(db_path: Path) -> None:
               measurement_id         VARCHAR,
               test_name              VARCHAR,
               probe_cc               VARCHAR,
-              measurement_start_time VARCHAR,
+              measurement_start_time TIMESTAMP,
               input                  VARCHAR,
               anomaly                BOOLEAN,
               confirmed              BOOLEAN,
@@ -247,8 +247,8 @@ def init_db(db_path: Path) -> None:
               source        VARCHAR,
               feed_url      VARCHAR,
               event_id      VARCHAR,
-              start_time    VARCHAR,
-              end_time      VARCHAR,
+              start_time    TIMESTAMP,
+              end_time      TIMESTAMP,
               country       VARCHAR,
               asn           VARCHAR,
               signal_type   VARCHAR,
@@ -293,6 +293,35 @@ def init_db(db_path: Path) -> None:
             );
             """
         )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS twelvedata_time_series (
+              source       VARCHAR,
+              symbol       VARCHAR,
+              interval     VARCHAR,
+              ts           TIMESTAMP,
+              open         DOUBLE,
+              high         DOUBLE,
+              low          DOUBLE,
+              close        DOUBLE,
+              volume       BIGINT,
+              currency     VARCHAR,
+              exchange     VARCHAR,
+              ingested_at  TIMESTAMP,
+              raw_path     VARCHAR
+            );
+            """
+        )
+        # Create indexes for performance
+        con.execute("CREATE INDEX IF NOT EXISTS idx_signals_signal_id ON signals(signal_id);")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_signals_severity ON signals(severity_score DESC, computed_at DESC);")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_usgs_earthquakes_key ON usgs_earthquakes(source, event_id);")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_usgs_earthquakes_query ON usgs_earthquakes(magnitude, time_utc);")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_ooni_measurements_key ON ooni_measurements(source, measurement_id);")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_caida_ioda_events_key ON caida_ioda_events(source, event_id);")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_ingest_runs_lookup ON ingest_runs(source, status, ended_at);")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_twelvedata_time_series_key ON twelvedata_time_series(source, symbol, interval, ts);")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_twelvedata_time_series_query ON twelvedata_time_series(source, symbol, ts DESC);")
     finally:
         con.close()
 
@@ -906,3 +935,44 @@ def show_latest(*, db_path: Path, limit: int = 10) -> None:
             print(f"{t} | M{mag} | {place} | {url}")
     finally:
         con.close()
+
+
+def upsert_twelvedata_time_series(db_path: Path, rows: list[dict]) -> int:
+    """Upsert Twelve Data time series records (idempotent on source+symbol+interval+ts)."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            existing = con.execute(
+                """
+                SELECT COUNT(*) FROM twelvedata_time_series
+                WHERE source = ? AND symbol = ? AND interval = ? AND ts = ?
+                """,
+                [r["source"], r["symbol"], r["interval"], r["ts"]],
+            ).fetchone()
+            if existing and existing[0] > 0:
+                continue
+            con.execute(
+                """
+                INSERT INTO twelvedata_time_series VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["symbol"],
+                    r["interval"],
+                    r["ts"],
+                    r["open"],
+                    r["high"],
+                    r["low"],
+                    r["close"],
+                    r["volume"],
+                    r["currency"],
+                    r["exchange"],
+                    r["ingested_at"],
+                    r["raw_path"],
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted

@@ -37,14 +37,14 @@ description = "GDACS alerts feed (RSS/XML)."
 [[sources]]
 name = "worldbank_gdp_usa"
 kind = "worldbank_indicator"
-url = "https://api.worldbank.org/v2/country/USA/indicator/NY.GDP.MKTP.CD?format=json&per_page=20000"
-description = "World Bank GDP (current US$) for USA."
+url = "https://api.worldbank.org/v2/country/USA/indicator/NY.GDP.MKTP.CD?format=json&per_page=20000&date=2020:2026"
+description = "World Bank GDP (current US$) for USA (2020-2026)."
 
 [[sources]]
 name = "worldbank_macro_fiscal"
 kind = "worldbank_macro_fiscal"
-url = "https://api.worldbank.org/v2/country/all/indicator/NY.GDP.MKTP.CN;NY.GDP.MKTP.PP.CD;PA.NUS.PPP;GC.DOD.TOTL.GD.ZS;GC.NLD.TOTL.GD.ZS;GC.REV.XGRT.GD.ZS;GC.REV.XGRT.CN;GC.XPN.INTP.CN?format=json&per_page=20000&source=2"
-description = "World Bank macro/fiscal indicators (WDI source=2, multi-indicator)."
+url = "https://api.worldbank.org/v2/country/all/indicator/NY.GDP.MKTP.CN;NY.GDP.MKTP.PP.CD;PA.NUS.PPP;GC.DOD.TOTL.GD.ZS;GC.NLD.TOTL.GD.ZS;GC.REV.XGRT.GD.ZS;GC.REV.XGRT.CN;GC.XPN.INTP.CN?format=json&per_page=20000&source=2&date=2020:2026"
+description = "World Bank macro/fiscal indicators (WDI source=2, multi-indicator, 2020-2026)."
 
 [[sources]]
 name = "datagov_catalog_climate"
@@ -80,8 +80,8 @@ description = "GDELT doc API query for 'democracy' (last 24h, 50 records)."
 [[sources]]
 name = "ooni_us_recent"
 kind = "ooni_measurements"
-url = "https://api.ooni.io/api/v1/measurements?probe_cc=US&limit=50&since=2026-01-29T00:00:00Z"
-description = "OONI measurement metadata for US (recent, 50 records)."
+url = "https://api.ooni.io/api/v1/measurements?probe_cc=US"
+description = "OONI measurement metadata for US (defaults: last 24h, 50 records)."
 
 [[sources]]
 name = "caida_ioda_recent"
@@ -100,3 +100,11 @@ name = "ripe_atlas_probes"
 kind = "ripe_atlas_probes"
 url = "https://atlas.ripe.net/api/v2/probes/?page=1&page_size=50"
 description = "RIPE Atlas probe metadata (page 1, 50 probes)."
+
+[[sources]]
+name = "twelvedata_watchlist_daily"
+kind = "twelvedata_time_series"
+description = "Twelve Data daily time series for watchlist symbols (requires TWELVEDATA_API_KEY)."
+symbols = ["SPY", "QQQ", "IWM", "DIA", "TLT", "EUR/USD", "BTC/USD"]
+interval = "1day"
+outputsize = 30

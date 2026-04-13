@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional, List
 import httpx
 
 from ..sources import load_sources, Source
+from ._retry import fetch_with_retry
 
 
 @dataclass(frozen=True)
@@ -123,7 +124,9 @@ def ingest_opendatasoft_explore(
     run_id = str(uuid.uuid4())
 
     try:
-        fr = fetch_opendatasoft_json(source.url, etag=state.get("etag"), last_modified=state.get("last_modified"))
+        fr = fetch_with_retry(
+            lambda: fetch_opendatasoft_json(source.url, etag=state.get("etag"), last_modified=state.get("last_modified"))
+        )
         init_db(db_path)
 
         if fr.status_code == 304:

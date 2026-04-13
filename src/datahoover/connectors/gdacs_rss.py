@@ -12,6 +12,7 @@ import feedparser
 import httpx
 
 from ..sources import load_sources, Source
+from ._retry import fetch_with_retry
 
 
 @dataclass(frozen=True)
@@ -143,7 +144,9 @@ def ingest_gdacs_rss(*, config_path: Path, source_name: str, data_dir: Path, db_
     run_id = str(uuid.uuid4())
 
     try:
-        fr = fetch_gdacs_rss(source.url, etag=state.get("etag"), last_modified=state.get("last_modified"))
+        fr = fetch_with_retry(
+            lambda: fetch_gdacs_rss(source.url, etag=state.get("etag"), last_modified=state.get("last_modified"))
+        )
         init_db(db_path)
 
         if fr.status_code == 304:

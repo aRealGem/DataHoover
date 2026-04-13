@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional, List
 import httpx
 
 from ..sources import load_sources, Source
+from ._retry import fetch_with_retry
 
 
 @dataclass(frozen=True)
@@ -120,7 +121,9 @@ def ingest_socrata_soda(*, config_path: Path, source_name: str, data_dir: Path, 
     run_id = str(uuid.uuid4())
 
     try:
-        fr = fetch_socrata_json(source.url, etag=state.get("etag"), last_modified=state.get("last_modified"))
+        fr = fetch_with_retry(
+            lambda: fetch_socrata_json(source.url, etag=state.get("etag"), last_modified=state.get("last_modified"))
+        )
         init_db(db_path)
 
         if fr.status_code == 304:

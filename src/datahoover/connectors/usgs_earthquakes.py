@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional, Tuple
 import httpx
 
 from ..sources import load_sources, Source
+from ._retry import fetch_with_retry
 
 
 @dataclass(frozen=True)
@@ -138,7 +139,9 @@ def ingest_usgs_geojson(*, config_path: Path, source_name: str, data_dir: Path, 
     run_id = str(uuid.uuid4())
 
     try:
-        fr = fetch_geojson(source.url, etag=state.get("etag"), last_modified=state.get("last_modified"))
+        fr = fetch_with_retry(
+            lambda: fetch_geojson(source.url, etag=state.get("etag"), last_modified=state.get("last_modified"))
+        )
 
         # Always initialize DB (cheap)
         init_db(db_path)

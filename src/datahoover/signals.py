@@ -81,15 +81,17 @@ def _earthquake_signals(
 ) -> List[Dict[str, Any]]:
     rows = con.execute(
         """
-        SELECT event_id, magnitude, place, time_utc, longitude, latitude, raw_json, ingested_at
+        SELECT source, event_id, magnitude, place, time_utc, longitude, latitude, raw_json, ingested_at
         FROM usgs_earthquakes
         WHERE magnitude >= ? AND time_utc >= ?
         """,
         [min_magnitude, cutoff],
     ).fetchall()
     signals: List[Dict[str, Any]] = []
-    raw_paths = _raw_paths_for_source(con, "usgs_all_day", cutoff)
-    for event_id, magnitude, place, time_utc, lon, lat, raw_json, ingested_at in rows:
+    # Collect distinct sources and fetch raw paths for each
+    sources = {row[0] for row in rows}
+    raw_paths_map = {src: _raw_paths_for_source(con, src, cutoff) for src in sources}
+    for source, event_id, magnitude, place, time_utc, lon, lat, raw_json, ingested_at in rows:
         country = _country_from_latlon(lat, lon)
         entity_type = "country" if country else "latlon"
         entity_id = country or f"{lat},{lon}"
@@ -106,7 +108,7 @@ def _earthquake_signals(
         }
         payload = {
             "signal_type": "earthquake",
-            "source": "usgs_all_day",
+            "source": source,
             "entity_type": entity_type,
             "entity_id": entity_id,
             "ts_start": str(time_utc),
@@ -116,7 +118,7 @@ def _earthquake_signals(
             {
                 "signal_id": _signal_id(payload),
                 "signal_type": "earthquake",
-                "source": "usgs_all_day",
+                "source": source,
                 "entity_type": entity_type,
                 "entity_id": entity_id,
                 "ts_start": time_utc,
@@ -126,7 +128,7 @@ def _earthquake_signals(
                 "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False),
                 "ingested_at": ingested_at,
                 "computed_at": computed_at,
-                "raw_paths": json.dumps(raw_paths),
+                "raw_paths": json.dumps(raw_paths_map.get(source, [])),
             }
         )
     return signals
@@ -160,15 +162,17 @@ def _gdacs_signals(
 ) -> List[Dict[str, Any]]:
     rows = con.execute(
         """
-        SELECT entry_id, title, summary, event_type, raw_json, published, updated, ingested_at
+        SELECT source, entry_id, title, summary, event_type, raw_json, published, updated, ingested_at
         FROM gdacs_alerts
         WHERE COALESCE(updated, published) >= ?
         """,
         [cutoff],
     ).fetchall()
     signals: List[Dict[str, Any]] = []
-    raw_paths = _raw_paths_for_source(con, "gdacs_alerts", cutoff)
-    for entry_id, title, summary, event_type, raw_json, published, updated, ingested_at in rows:
+    # Collect distinct sources and fetch raw paths for each
+    sources = {row[0] for row in rows}
+    raw_paths_map = {src: _raw_paths_for_source(con, src, cutoff) for src in sources}
+    for source, entry_id, title, summary, event_type, raw_json, published, updated, ingested_at in rows:
         entry = {}
         if isinstance(raw_json, str):
             try:
@@ -188,7 +192,7 @@ def _gdacs_signals(
         }
         payload = {
             "signal_type": "alert",
-            "source": "gdacs_alerts",
+            "source": source,
             "entity_type": "global",
             "entity_id": event_type or "unknown",
             "ts_start": str(ts_start),
@@ -198,7 +202,7 @@ def _gdacs_signals(
             {
                 "signal_id": _signal_id(payload),
                 "signal_type": "alert",
-                "source": "gdacs_alerts",
+                "source": source,
                 "entity_type": "global",
                 "entity_id": event_type or "unknown",
                 "ts_start": ts_start,
@@ -208,7 +212,7 @@ def _gdacs_signals(
                 "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False),
                 "ingested_at": ingested_at,
                 "computed_at": computed_at,
-                "raw_paths": json.dumps(raw_paths),
+                "raw_paths": json.dumps(raw_paths_map.get(source, [])),
             }
         )
     return signals
@@ -222,15 +226,17 @@ def _ioda_signals(
 ) -> List[Dict[str, Any]]:
     rows = con.execute(
         """
-        SELECT event_id, start_time, end_time, country, asn, severity, raw_json, ingested_at
+        SELECT source, event_id, start_time, end_time, country, asn, severity, raw_json, ingested_at
         FROM caida_ioda_events
-        WHERE try_cast(start_time AS TIMESTAMP) >= ?
+        WHERE CAST(start_time AS TIMESTAMPTZ) >= ?
         """,
         [cutoff],
     ).fetchall()
     signals: List[Dict[str, Any]] = []
-    raw_paths = _raw_paths_for_source(con, "caida_ioda_recent", cutoff)
-    for event_id, start_time, end_time, country, asn, severity, raw_json, ingested_at in rows:
+    # Collect distinct sources and fetch raw paths for each
+    sources = {row[0] for row in rows}
+    raw_paths_map = {src: _raw_paths_for_source(con, src, cutoff) for src in sources}
+    for source, event_id, start_time, end_time, country, asn, severity, raw_json, ingested_at in rows:
         score = _as_float(severity)
         if score is None and isinstance(raw_json, str):
             try:
@@ -252,7 +258,7 @@ def _ioda_signals(
         }
         payload = {
             "signal_type": "internet_outage",
-            "source": "caida_ioda_recent",
+            "source": source,
             "entity_type": entity_type,
             "entity_id": entity_id,
             "ts_start": str(start_time),
@@ -262,7 +268,7 @@ def _ioda_signals(
             {
                 "signal_id": _signal_id(payload),
                 "signal_type": "internet_outage",
-                "source": "caida_ioda_recent",
+                "source": source,
                 "entity_type": entity_type,
                 "entity_id": entity_id,
                 "ts_start": start_time,
@@ -272,7 +278,7 @@ def _ioda_signals(
                 "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False),
                 "ingested_at": ingested_at,
                 "computed_at": computed_at,
-                "raw_paths": json.dumps(raw_paths),
+                "raw_paths": json.dumps(raw_paths_map.get(source, [])),
             }
         )
     return signals
@@ -294,8 +300,8 @@ def _ooni_signals(
           COUNT(*) AS total,
           MAX(ingested_at) AS ingested_at
         FROM ooni_measurements
-        WHERE try_cast(measurement_start_time AS TIMESTAMP) >= ?
-          AND try_cast(measurement_start_time AS TIMESTAMP) < ?
+        WHERE CAST(measurement_start_time AS TIMESTAMPTZ) >= ?
+          AND CAST(measurement_start_time AS TIMESTAMPTZ) < ?
         GROUP BY probe_cc
         """,
         [cutoff, computed_at],
@@ -307,15 +313,26 @@ def _ooni_signals(
           SUM(CASE WHEN COALESCE(confirmed, anomaly) THEN 1 ELSE 0 END) AS bad,
           COUNT(*) AS total
         FROM ooni_measurements
-        WHERE try_cast(measurement_start_time AS TIMESTAMP) >= ?
-          AND try_cast(measurement_start_time AS TIMESTAMP) < ?
+        WHERE CAST(measurement_start_time AS TIMESTAMPTZ) >= ?
+          AND CAST(measurement_start_time AS TIMESTAMPTZ) < ?
         GROUP BY probe_cc
         """,
         [prior_start, cutoff],
     ).fetchall()
     prior_map = {row[0]: row for row in prior_rows}
     signals: List[Dict[str, Any]] = []
-    raw_paths = _raw_paths_for_source(con, "ooni_us_recent", cutoff)
+    source_rows = con.execute(
+        "SELECT DISTINCT source FROM ooni_measurements WHERE CAST(measurement_start_time AS TIMESTAMPTZ) >= ?",
+        [cutoff],
+    ).fetchall()
+    sources = {row[0] for row in source_rows}
+    raw_paths_map = {src: _raw_paths_for_source(con, src, cutoff) for src in sources}
+    # Aggregate all raw paths for signals (since they're aggregated by probe_cc, not by source)
+    all_raw_paths = []
+    for paths_list in raw_paths_map.values():
+        all_raw_paths.extend(paths_list)
+    # Use first source as the canonical source for the signal (or "ooni" as a fallback)
+    signal_source = list(sources)[0] if sources else "ooni"
     for probe_cc, bad, total, ingested_at in current_rows:
         if not probe_cc or not total:
             continue
@@ -335,7 +352,7 @@ def _ooni_signals(
         }
         payload = {
             "signal_type": "censorship_spike",
-            "source": "ooni_us_recent",
+            "source": signal_source,
             "entity_type": "country",
             "entity_id": probe_cc,
             "ts_start": cutoff.isoformat(),
@@ -345,7 +362,7 @@ def _ooni_signals(
             {
                 "signal_id": _signal_id(payload),
                 "signal_type": "censorship_spike",
-                "source": "ooni_us_recent",
+                "source": signal_source,
                 "entity_type": "country",
                 "entity_id": probe_cc,
                 "ts_start": cutoff,
@@ -355,7 +372,7 @@ def _ooni_signals(
                 "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False),
                 "ingested_at": ingested_at,
                 "computed_at": computed_at,
-                "raw_paths": json.dumps(raw_paths),
+                "raw_paths": json.dumps(all_raw_paths),
             }
         )
     return signals
@@ -380,7 +397,18 @@ def _worldbank_signals(
         [cutoff_year],
     ).fetchall()
     signals: List[Dict[str, Any]] = []
-    raw_paths = _raw_paths_for_source(con, "worldbank_macro_fiscal", cutoff)
+    # Collect distinct sources from worldbank_indicators table (view filters to 'worldbank_macro_fiscal')
+    source_rows = con.execute(
+        "SELECT DISTINCT source FROM worldbank_indicators WHERE source = 'worldbank_macro_fiscal'",
+    ).fetchall()
+    sources = {row[0] for row in source_rows}
+    raw_paths_map = {src: _raw_paths_for_source(con, src, cutoff) for src in sources}
+    # Aggregate all raw paths (since view aggregates by country/year)
+    all_raw_paths = []
+    for paths_list in raw_paths_map.values():
+        all_raw_paths.extend(paths_list)
+    # Use first source as the canonical source for the signal
+    signal_source = list(sources)[0] if sources else "worldbank_macro_fiscal"
     for iso3, year, debt, net_lend, revenue, interest in rows:
         if iso3 is None or year is None:
             continue
@@ -403,7 +431,7 @@ def _worldbank_signals(
         }
         payload = {
             "signal_type": "fiscal_stress",
-            "source": "worldbank_macro_fiscal",
+            "source": signal_source,
             "entity_type": "country",
             "entity_id": iso3,
             "ts_start": ts_start.isoformat(),
@@ -413,7 +441,7 @@ def _worldbank_signals(
             {
                 "signal_id": _signal_id(payload),
                 "signal_type": "fiscal_stress",
-                "source": "worldbank_macro_fiscal",
+                "source": signal_source,
                 "entity_type": "country",
                 "entity_id": iso3,
                 "ts_start": ts_start,
@@ -423,9 +451,109 @@ def _worldbank_signals(
                 "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False),
                 "ingested_at": computed_at,
                 "computed_at": computed_at,
-                "raw_paths": json.dumps(raw_paths),
+                "raw_paths": json.dumps(all_raw_paths),
             }
         )
+    return signals
+
+
+def _market_move_signals(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    cutoff: datetime,
+    computed_at: datetime,
+) -> List[Dict[str, Any]]:
+    """Compute market move signals based on daily returns."""
+    # Get time series data ordered by symbol and timestamp
+    rows = con.execute(
+        """
+        SELECT source, symbol, ts, close, raw_path, ingested_at
+        FROM twelvedata_time_series
+        WHERE ts >= ?
+        ORDER BY symbol, ts DESC
+        """,
+        [cutoff],
+    ).fetchall()
+    
+    if not rows:
+        return []
+    
+    signals: List[Dict[str, Any]] = []
+    
+    # Collect distinct sources and fetch raw paths for each
+    sources = {row[0] for row in rows}
+    raw_paths_map = {src: _raw_paths_for_source(con, src, cutoff) for src in sources}
+    
+    # Group by symbol and compute returns
+    symbol_data: Dict[str, List[tuple]] = {}
+    for source, symbol, ts, close, raw_path, ingested_at in rows:
+        if symbol not in symbol_data:
+            symbol_data[symbol] = []
+        symbol_data[symbol].append((source, ts, close, raw_path, ingested_at))
+    
+    for symbol, data_points in symbol_data.items():
+        # Sort by timestamp descending (most recent first)
+        data_points.sort(key=lambda x: x[1], reverse=True)
+        
+        if len(data_points) < 2:
+            continue
+        
+        # Get most recent two data points
+        source_recent, ts_recent, close_recent, raw_path_recent, ingested_at = data_points[0]
+        source_prev, ts_prev, close_prev, _, _ = data_points[1]
+        
+        if close_prev is None or close_prev == 0 or close_recent is None:
+            continue
+        
+        # Calculate daily return
+        daily_return = (close_recent - close_prev) / close_prev
+        abs_return = abs(daily_return)
+        
+        # Scale severity: 5% move = 0.5, 10% move = 1.0
+        severity = min(1.0, abs_return / 0.10)
+        
+        # Only create signal for significant moves (>2%)
+        if abs_return < 0.02:
+            continue
+        
+        direction = "gain" if daily_return > 0 else "loss"
+        summary = f"{symbol} {abs(daily_return)*100:.2f}% {direction}"
+        
+        details = {
+            "symbol": symbol,
+            "ts_recent": str(ts_recent),
+            "ts_prev": str(ts_prev),
+            "close_recent": close_recent,
+            "close_prev": close_prev,
+            "daily_return": daily_return,
+            "direction": direction,
+        }
+        
+        payload = {
+            "signal_type": "market_move",
+            "source": source_recent,
+            "entity_type": "symbol",
+            "entity_id": symbol,
+            "ts_start": str(ts_recent),
+            "summary": summary,
+        }
+        
+        signals.append({
+            "signal_id": _signal_id(payload),
+            "signal_type": "market_move",
+            "source": source_recent,
+            "entity_type": "symbol",
+            "entity_id": symbol,
+            "ts_start": ts_recent,
+            "ts_end": ts_recent,
+            "severity_score": severity,
+            "summary": summary,
+            "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False),
+            "ingested_at": ingested_at,
+            "computed_at": computed_at,
+            "raw_paths": json.dumps(raw_paths_map.get(source_recent, [])),
+        })
+    
     return signals
 
 
@@ -451,6 +579,7 @@ def compute_signals(
         signals.extend(_ioda_signals(con, cutoff=cutoff, computed_at=computed_at))
         signals.extend(_ooni_signals(con, cutoff=cutoff, computed_at=computed_at))
         signals.extend(_worldbank_signals(con, cutoff=cutoff, computed_at=computed_at, db_path=db_path_obj))
+        signals.extend(_market_move_signals(con, cutoff=cutoff, computed_at=computed_at))
         return upsert_signals(db_path_obj, signals)
     finally:
         con.close()

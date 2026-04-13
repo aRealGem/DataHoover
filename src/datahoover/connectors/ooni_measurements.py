@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ from typing import Any, Dict, Optional, List
 import httpx
 
 from ..sources import load_sources, Source
+from ._retry import fetch_with_retry
 
 
 @dataclass(frozen=True)
@@ -41,9 +43,31 @@ def _save_state(path: Path, state: Dict[str, Any]) -> None:
     path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
 
 
+DEFAULT_WINDOW_S = 24 * 60 * 60
+DEFAULT_LIMIT = 50
+
+
+def _build_request(source: Source, *, now: int | None = None) -> tuple[str, Dict[str, str]]:
+    """Build OONI request with dynamic since parameter."""
+    url = httpx.URL(source.url)
+    base_url = str(url.copy_with(params=None))
+    params: Dict[str, str] = dict(url.params)
+    
+    # Compute dynamic since parameter (24h ago) if not already set
+    if "since" not in params:
+        now_ts = int(time.time()) if now is None else now
+        since_ts = now_ts - DEFAULT_WINDOW_S
+        since_dt = datetime.fromtimestamp(since_ts, timezone.utc)
+        params["since"] = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    
+    params.setdefault("limit", str(DEFAULT_LIMIT))
+    return base_url, params
+
+
 def fetch_ooni_json(
     url: str,
     *,
+    params: Dict[str, str] | None = None,
     etag: str | None = None,
     last_modified: str | None = None,
     timeout_s: float = 30.0,
@@ -57,7 +81,7 @@ def fetch_ooni_json(
         headers["If-Modified-Since"] = last_modified
 
     with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
-        r = client.get(url, headers=headers)
+        r = client.get(url, headers=headers, params=params)
 
     if r.status_code == 304:
         return FetchResult(status_code=304, etag=etag, last_modified=last_modified, data=None, raw_bytes=None)
@@ -70,6 +94,19 @@ def fetch_ooni_json(
     if not isinstance(data, dict):
         raise ValueError("OONI response must be a JSON object")
     return FetchResult(status_code=r.status_code, etag=new_etag, last_modified=new_last_modified, data=data, raw_bytes=raw)
+
+
+def _parse_iso_datetime(iso_str: Any) -> Optional[datetime]:
+    """Parse ISO 8601 datetime string to datetime object."""
+    if iso_str is None or not isinstance(iso_str, str):
+        return None
+    try:
+        # Handle both Z and +00:00 suffixes
+        if iso_str.endswith('Z'):
+            iso_str = iso_str[:-1] + '+00:00'
+        return datetime.fromisoformat(iso_str)
+    except (ValueError, AttributeError):
+        return None
 
 
 def _normalize_measurements(
@@ -85,7 +122,7 @@ def _normalize_measurements(
                 "measurement_id": measurement_id,
                 "test_name": m.get("test_name"),
                 "probe_cc": m.get("probe_cc"),
-                "measurement_start_time": m.get("measurement_start_time"),
+                "measurement_start_time": _parse_iso_datetime(m.get("measurement_start_time")),
                 "input": m.get("input"),
                 "anomaly": m.get("anomaly"),
                 "confirmed": m.get("confirmed"),
@@ -121,7 +158,10 @@ def ingest_ooni_measurements(
     run_id = str(uuid.uuid4())
 
     try:
-        fr = fetch_ooni_json(source.url, etag=state.get("etag"), last_modified=state.get("last_modified"))
+        base_url, params = _build_request(source)
+        fr = fetch_with_retry(
+            lambda: fetch_ooni_json(base_url, params=params, etag=state.get("etag"), last_modified=state.get("last_modified"))
+        )
         init_db(db_path)
 
         if fr.status_code == 304:

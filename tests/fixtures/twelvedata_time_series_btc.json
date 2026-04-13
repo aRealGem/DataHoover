@@ -1,0 +1,28 @@
+{
+  "meta": {
+    "symbol": "BTC/USD",
+    "interval": "1day",
+    "currency_base": "Bitcoin",
+    "currency_quote": "US Dollar",
+    "type": "Digital Currency"
+  },
+  "values": [
+    {
+      "datetime": "2026-01-31",
+      "open": "98450.00",
+      "high": "99123.50",
+      "low": "97800.25",
+      "close": "98900.75",
+      "volume": "12345"
+    },
+    {
+      "datetime": "2026-01-30",
+      "open": "97200.00",
+      "high": "98600.00",
+      "low": "96950.00",
+      "close": "98400.00",
+      "volume": "15678"
+    }
+  ],
+  "status": "ok"
+}

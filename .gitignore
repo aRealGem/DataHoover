@@ -14,6 +14,7 @@ data/state/
 data/warehouse.duckdb
 data/*.duckdb
 data/snapshots/
+data/exports/
 
 # OS / editor
 .DS_Store

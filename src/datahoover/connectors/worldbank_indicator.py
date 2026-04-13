@@ -12,6 +12,7 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import httpx
 
 from ..sources import load_sources, Source
+from ._retry import fetch_with_retry
 
 
 @dataclass(frozen=True)
@@ -177,8 +178,10 @@ def ingest_worldbank_indicator(
     run_id = str(uuid.uuid4())
 
     try:
-        fr = fetch_worldbank_json(
-            fetch_url, page=1, etag=state.get("etag"), last_modified=state.get("last_modified")
+        fr = fetch_with_retry(
+            lambda: fetch_worldbank_json(
+                fetch_url, page=1, etag=state.get("etag"), last_modified=state.get("last_modified")
+            )
         )
         init_db(db_path)
 
@@ -206,15 +209,7 @@ def ingest_worldbank_indicator(
         pages_payload = [fr.data]
 
         for page in range(2, pages + 1):
-            pr = None
-            for attempt in range(1, 4):
-                try:
-                    pr = fetch_worldbank_json(fetch_url, page=page)
-                    break
-                except httpx.TimeoutException:
-                    if attempt == 3:
-                        raise
-                    time.sleep(attempt * 2)
+            pr = fetch_with_retry(lambda p=page: fetch_worldbank_json(fetch_url, page=p))
             if pr.data is None:
                 continue
             pages_payload.append(pr.data)

@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional, List
 import httpx
 
 from ..sources import load_sources, Source
+from ._retry import fetch_with_retry
 
 
 @dataclass(frozen=True)
@@ -154,15 +155,24 @@ def _parse_location(event: Dict[str, Any]) -> tuple[Optional[str], Optional[str]
     return country, asn
 
 
-def _maybe_iso(ts: Any) -> Optional[str]:
+def _maybe_datetime(ts: Any) -> Optional[datetime]:
+    """Convert timestamp (epoch seconds or ISO string) to datetime object."""
     if ts is None:
         return None
     if isinstance(ts, (int, float)):
         try:
-            return datetime.fromtimestamp(ts, timezone.utc).isoformat()
+            return datetime.fromtimestamp(ts, timezone.utc)
         except (OverflowError, OSError, ValueError):
-            return str(ts)
-    return str(ts)
+            return None
+    if isinstance(ts, str):
+        try:
+            # Handle both Z and +00:00 suffixes
+            if ts.endswith('Z'):
+                ts = ts[:-1] + '+00:00'
+            return datetime.fromisoformat(ts)
+        except (ValueError, AttributeError):
+            return None
+    return None
 
 
 def _normalize_events(
@@ -181,8 +191,8 @@ def _normalize_events(
                 "source": source.name,
                 "feed_url": feed_url,
                 "event_id": _event_id(event),
-                "start_time": _maybe_iso(start),
-                "end_time": _maybe_iso(end),
+                "start_time": _maybe_datetime(start),
+                "end_time": _maybe_datetime(end),
                 "country": event.get("country") or event.get("country_name") or country,
                 "asn": event.get("asn") or asn,
                 "signal_type": event.get("signal") or event.get("signal_type") or event.get("datasource"),
@@ -215,27 +225,14 @@ def ingest_ioda_events(*, config_path: Path, source_name: str, data_dir: Path, d
 
     try:
         base_url, params = _build_request(source)
-        fr = None
-        for attempt in range(1, 4):
-            try:
-                fr = fetch_ioda_json(
-                    base_url,
-                    params=params,
-                    etag=state.get("etag"),
-                    last_modified=state.get("last_modified"),
-                )
-                break
-            except httpx.HTTPStatusError as exc:
-                status = exc.response.status_code if exc.response is not None else None
-                if attempt == 3 or (status is not None and status < 500 and status != 429):
-                    raise
-                time.sleep(2 ** (attempt - 1))
-            except httpx.RequestError:
-                if attempt == 3:
-                    raise
-                time.sleep(2 ** (attempt - 1))
-        if fr is None:
-            raise RuntimeError("Failed to fetch IODA events")
+        fr = fetch_with_retry(
+            lambda: fetch_ioda_json(
+                base_url,
+                params=params,
+                etag=state.get("etag"),
+                last_modified=state.get("last_modified"),
+            )
+        )
         init_db(db_path)
 
         if fr.status_code == 304:
