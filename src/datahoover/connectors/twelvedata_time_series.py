@@ -11,6 +11,8 @@ from typing import Any, Dict, Optional, List
 
 import httpx
 
+from ..env import get_secret
+from ..storage.duckdb_store import init_db, upsert_twelvedata_time_series, log_run
 from ..sources import load_sources, Source
 from ._retry import fetch_with_retry
 
@@ -175,10 +177,11 @@ def ingest_twelvedata_time_series(
     *, config_path: Path, source_name: str, data_dir: Path, db_path: Path
 ) -> None:
     """Fetch Twelve Data time series and store it locally."""
-    from ..storage.duckdb_store import init_db, upsert_twelvedata_time_series, log_run
     
     # Check for API key - try environment variable first, then Keychain
     api_key = os.environ.get("TWELVEDATA_API_KEY")
+    if not api_key:
+        api_key = get_secret("TWELVEDATA_API_KEY")
     if not api_key:
         api_key = _get_api_key_from_keychain()
     
