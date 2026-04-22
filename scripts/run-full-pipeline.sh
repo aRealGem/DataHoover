@@ -83,6 +83,7 @@ run_ingest "ingest-ripe-atlas" ingest-ripe-atlas --source ripe_atlas_probes
 run_ingest "ingest-twelvedata" ingest-twelvedata --source twelvedata_watchlist_daily
 run_ingest "ingest-fred-macro" ingest-fred --source fred_macro_watchlist
 run_ingest "ingest-fred-crypto" ingest-fred --source fred_crypto_fx
+run_ingest "ingest-bls" ingest-bls --source bls_truthbot_watchlist
 
 echo "--- compute-signals ---"
 set +e

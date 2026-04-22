@@ -107,6 +107,14 @@ description = "FRED Coinbase crypto reference rates (BTC, ETH, experimental XMR)
 series_ids = ["CBBTCUSD", "CBETHUSD", "CBXMRUSD"]
 limit = 120
 
+[[sources]]
+name = "bls_truthbot_watchlist"
+kind = "bls_timeseries"
+url = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
+description = "BLS CPS/CES/CPI-U starter series for TruthBot lookup (unemployment, CPI-U, NFP, LFPR)."
+series_ids = ["LNS14000000", "CUUR0000SA0", "CES0000000001", "LNS11300000"]
+purpose = "raw_only"
+
 # --------------------------------------------------------------------------- #
 # Signal producer thresholds. Keys not present here fall back to the defaults
 # in `SIGNAL_THRESHOLD_DEFAULTS` in `src/datahoover/sources.py`.

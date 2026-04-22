@@ -334,6 +334,21 @@ def init_db(db_path: Path) -> None:
             );
             """
         )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bls_timeseries_observations (
+              source       VARCHAR,
+              series_id    VARCHAR,
+              year         INTEGER,
+              period       VARCHAR,
+              period_name  VARCHAR,
+              value        DOUBLE,
+              footnotes    VARCHAR,
+              ingested_at  TIMESTAMP,
+              raw_path     VARCHAR
+            );
+            """
+        )
         # Create indexes for performance
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_signal_id ON signals(signal_id);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_severity ON signals(severity_score DESC, computed_at DESC);")
@@ -345,6 +360,9 @@ def init_db(db_path: Path) -> None:
         con.execute("CREATE INDEX IF NOT EXISTS idx_twelvedata_time_series_key ON twelvedata_time_series(source, symbol, interval, series_group, ts);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_twelvedata_time_series_query ON twelvedata_time_series(source, symbol, ts DESC);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_fred_series_key ON fred_series_observations(source, series_id, observation_date, realtime_start, realtime_end);")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_bls_timeseries_key ON bls_timeseries_observations(source, series_id, year, period);"
+        )
     finally:
         con.close()
 
@@ -953,6 +971,39 @@ def upsert_fred_series_observations(db_path: Path, rows: list[dict]) -> int:
     return inserted
 
 
+def upsert_bls_timeseries_observations(db_path: Path, rows: list[dict]) -> int:
+    """Upsert BLS timeseries rows keyed by source, series_id, year, and period."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                """
+                DELETE FROM bls_timeseries_observations
+                WHERE source = ? AND series_id = ? AND year = ? AND period = ?
+                """,
+                [r["source"], r["series_id"], r["year"], r["period"]],
+            )
+            con.execute(
+                """
+                INSERT INTO bls_timeseries_observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["series_id"],
+                    r["year"],
+                    r["period"],
+                    r.get("period_name"),
+                    r.get("value"),
+                    r.get("footnotes"),
+                    r.get("ingested_at"),
+                    r.get("raw_path"),
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
 
 
 def log_run(
