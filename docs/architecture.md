@@ -46,6 +46,18 @@ Each pipeline is: one or more raw sources → one producer function → rows in 
 - `fred_macro_watchlist` — FRED indexes / gold / USD FX crosses; each series emits its own signal (distinct from TD tickers; SP500 ≠ SPY, DEXUSEU ≠ EUR/USD).
 - `fred_crypto_fx` — FRED Coinbase BTC/ETH/XMR. When both TD and FRED produce a candidate for the same crypto on the same UTC calendar day, **Twelve Data wins** and the FRED twin is dropped (canonical `entity_id` uses the TD form, e.g. `BTC/USD`). Requires `FRED_API_KEY`.
 
+### 7. Weather alerts → `_weather_alert_signals` (`signal_type`: `weather_alert`)
+
+*Fires when `severity in {"Severe","Extreme"}`. Severity score is the product of three mapped NWS factors clamped to 0..1:*
+
+- *severity: Extreme=1.0, Severe=0.8, Moderate=0.5, Minor=0.3, Unknown=0.5*
+- *urgency: Immediate=1.0, Expected=0.75, Future=0.5, Past=0.25, Unknown=0.5*
+- *certainty: Observed=1.0, Likely=0.75, Possible=0.5, Unlikely=0.25, Unknown=0.5*
+
+*`entity_type = "ugc_zone"`, `entity_id` = the final path segment of `properties.affectedZones[0]` (or `"unknown"`). Dedupes on `(entity_id, ts_start)` where `ts_start = COALESCE(effective, sent)`.*
+
+- `nws_alerts_active` — National Weather Service active alerts (weather.gov).
+
 ## Producer registry
 
 `compute_signals` iterates `signals.PRODUCERS`, a module-level ordered list of `(name, adapter)` pairs. Each adapter has the uniform signature `(con, *, cutoff, computed_at, **config) -> list[SignalRow]` and delegates to the underlying producer function. New producers append to this list in commit order.
@@ -86,10 +98,10 @@ These have connectors and tables in [`duckdb_store.py`](../src/datahoover/storag
 
 | Category | Source names (`sources.toml`) |
 |----------|--------------------------------|
-| Weather & US disasters | `openfema_disaster_declarations`, `nws_alerts_active` |
+| Weather & US disasters | `openfema_disaster_declarations` |
 | Macro & markets (extra / unsignaled) | `eurostat_gdp`, `worldbank_gdp_usa` |
 | Catalog / discovery | `datagov_catalog_climate`, `hdx_catalog_cholera`, `socrata_example`, `opendatasoft_example` |
 | News | `gdelt_democracy_24h` |
 | Network measurement | `ripe_atlas_probes` |
 
-That is **9** dark sources vs **10** source rows that feed the six pipelines above (`ripe_ris_live_10s` enriches IODA but is not an independent signal). The file has 20 total `[[sources]]` blocks.
+That is **8** dark sources vs **11** source rows that feed the seven pipelines above (`ripe_ris_live_10s` enriches IODA but is not an independent signal). The file has 20 total `[[sources]]` blocks.

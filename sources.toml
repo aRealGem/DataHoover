@@ -29,7 +29,6 @@ name = "nws_alerts_active"
 kind = "nws_alerts_active"
 url = "https://api.weather.gov/alerts/active?status=actual"
 description = "NWS active alerts (weather.gov API)."
-purpose = "raw_only"
 
 [[sources]]
 name = "gdacs_alerts"

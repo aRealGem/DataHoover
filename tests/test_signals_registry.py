@@ -12,7 +12,15 @@ from datahoover.signals import PRODUCERS, compute_signals
 def test_registry_names_and_order_match_docs():
     """The published order is part of the contract; keep it stable."""
     names = [name for name, _ in PRODUCERS]
-    assert names == ["earthquake", "gdacs", "ioda", "ooni", "worldbank", "market_move"]
+    assert names == [
+        "earthquake",
+        "gdacs",
+        "ioda",
+        "ooni",
+        "worldbank",
+        "market_move",
+        "weather_alert",
+    ]
 
 
 def test_registry_entries_are_callable_with_uniform_signature():
@@ -44,6 +52,7 @@ def test_compute_signals_invokes_every_registered_producer(monkeypatch, tmp_path
         ("ooni", fake("ooni")),
         ("worldbank", fake("worldbank")),
         ("market_move", fake("market_move")),
+        ("weather_alert", fake("weather_alert")),
     ]
     monkeypatch.setattr(signals_module, "PRODUCERS", spy_registry)
 
@@ -55,4 +64,12 @@ def test_compute_signals_invokes_every_registered_producer(monkeypatch, tmp_path
     )
 
     assert inserted == 0
-    assert calls == ["earthquake", "gdacs", "ioda", "ooni", "worldbank", "market_move"]
+    assert calls == [
+        "earthquake",
+        "gdacs",
+        "ioda",
+        "ooni",
+        "worldbank",
+        "market_move",
+        "weather_alert",
+    ]

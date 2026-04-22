@@ -640,6 +640,127 @@ def _market_move_signals(
     return signals
 
 
+# NWS severity/urgency/certainty component weights. Product is clamped to [0, 1].
+# severity: Extreme=1.0, Severe=0.8, Moderate=0.5, Minor=0.3, Unknown=0.5.
+# urgency: Immediate=1.0, Expected=0.75, Future=0.5, Past=0.25, Unknown=0.5.
+# certainty: Observed=1.0, Likely=0.75, Possible=0.5, Unlikely=0.25, Unknown=0.5.
+_NWS_SEVERITY = {"Extreme": 1.0, "Severe": 0.8, "Moderate": 0.5, "Minor": 0.3, "Unknown": 0.5}
+_NWS_URGENCY = {"Immediate": 1.0, "Expected": 0.75, "Future": 0.5, "Past": 0.25, "Unknown": 0.5}
+_NWS_CERTAINTY = {"Observed": 1.0, "Likely": 0.75, "Possible": 0.5, "Unlikely": 0.25, "Unknown": 0.5}
+_NWS_FIRE_SEVERITIES = {"Severe", "Extreme"}
+
+
+def _first_ugc_zone(raw_json: Any) -> str:
+    """Return the final path segment of the first `affectedZones` URL, or 'unknown'."""
+    if not isinstance(raw_json, str) or not raw_json:
+        return "unknown"
+    try:
+        payload = json.loads(raw_json)
+    except (ValueError, TypeError):
+        return "unknown"
+    props = payload.get("properties") if isinstance(payload, dict) else None
+    if not isinstance(props, dict):
+        return "unknown"
+    zones = props.get("affectedZones")
+    if not isinstance(zones, list) or not zones:
+        return "unknown"
+    first = zones[0]
+    if not isinstance(first, str):
+        return "unknown"
+    return first.rstrip("/").rsplit("/", 1)[-1] or "unknown"
+
+
+def _weather_alert_signals(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    cutoff: datetime,
+    computed_at: datetime,
+) -> List[Dict[str, Any]]:
+    """NWS active alerts -> weather_alert signals; fires on Severe/Extreme; severity = product."""
+    if not con.execute(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'nws_alerts'"
+    ).fetchone()[0]:
+        return []
+    rows = con.execute(
+        """
+        SELECT source, alert_id, effective, sent, expires, severity, urgency, certainty,
+               event, headline, area_desc, raw_json, ingested_at
+        FROM nws_alerts
+        WHERE COALESCE(effective, sent) >= ?
+        """,
+        [cutoff],
+    ).fetchall()
+    signals: List[Dict[str, Any]] = []
+    sources = {row[0] for row in rows}
+    raw_paths_map = {src: _raw_paths_for_source(con, src, cutoff) for src in sources}
+    seen: set[tuple[str, Any]] = set()
+    for (
+        source,
+        alert_id,
+        effective,
+        sent,
+        expires,
+        severity,
+        urgency,
+        certainty,
+        event,
+        headline,
+        area_desc,
+        raw_json,
+        ingested_at,
+    ) in rows:
+        if severity not in _NWS_FIRE_SEVERITIES:
+            continue
+        score = (
+            _NWS_SEVERITY.get(severity, 0.5)
+            * _NWS_URGENCY.get(urgency or "Unknown", 0.5)
+            * _NWS_CERTAINTY.get(certainty or "Unknown", 0.5)
+        )
+        score = max(0.0, min(1.0, score))
+        ts_start = effective or sent
+        entity_id = _first_ugc_zone(raw_json)
+        key = (entity_id, ts_start)
+        if key in seen:
+            continue
+        seen.add(key)
+        summary = f"{event or 'NWS alert'} ({severity}) in {entity_id}"
+        details = {
+            "alert_id": alert_id,
+            "severity": severity,
+            "urgency": urgency,
+            "certainty": certainty,
+            "event": event,
+            "headline": headline,
+            "area_desc": area_desc,
+        }
+        payload = {
+            "signal_type": "weather_alert",
+            "source": source,
+            "entity_type": "ugc_zone",
+            "entity_id": entity_id,
+            "ts_start": str(ts_start),
+            "summary": summary,
+        }
+        signals.append(
+            {
+                "signal_id": _signal_id(payload),
+                "signal_type": "weather_alert",
+                "source": source,
+                "entity_type": "ugc_zone",
+                "entity_id": entity_id,
+                "ts_start": ts_start,
+                "ts_end": expires,
+                "severity_score": score,
+                "summary": summary,
+                "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False),
+                "ingested_at": ingested_at,
+                "computed_at": computed_at,
+                "raw_paths": json.dumps(raw_paths_map.get(source, [])),
+            }
+        )
+    return signals
+
+
 ProducerFn = Callable[..., List[Dict[str, Any]]]
 
 # Mapping of producer name -> source names in sources.toml that feed it.
@@ -656,6 +777,7 @@ PRODUCER_SOURCES: Dict[str, List[str]] = {
         "fred_macro_watchlist",
         "fred_crypto_fx",
     ],
+    "weather_alert": ["nws_alerts_active"],
 }
 
 # Module-level registry: ordered list of (name, adapter) where each adapter has the
@@ -703,6 +825,12 @@ PRODUCERS: List[tuple[str, ProducerFn]] = [
         "market_move",
         lambda con, *, cutoff, computed_at, **cfg: _market_move_signals(
             con, cutoff=cutoff, computed_at=computed_at, **cfg["thresholds"].get("market_move", {})
+        ),
+    ),
+    (
+        "weather_alert",
+        lambda con, *, cutoff, computed_at, **cfg: _weather_alert_signals(
+            con, cutoff=cutoff, computed_at=computed_at
         ),
     ),
 ]
