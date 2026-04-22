@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import duckdb
 
@@ -218,6 +218,32 @@ def _gdacs_signals(
     return signals
 
 
+def _ripe_ris_table_exists(con: duckdb.DuckDBPyConnection) -> bool:
+    """Return True iff ripe_ris_messages table has been created in the current DB."""
+    return bool(
+        con.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'ripe_ris_messages'"
+        ).fetchone()[0]
+    )
+
+
+def _ripe_ris_count_in_window(
+    con: duckdb.DuckDBPyConnection, start_time: Any, end_time: Any, computed_at: datetime
+) -> int:
+    """Count RIPE RIS messages whose timestamp falls in [start_time, COALESCE(end_time, computed_at)]."""
+    if start_time is None:
+        return 0
+    upper = end_time if end_time is not None else computed_at
+    row = con.execute(
+        """
+        SELECT COUNT(*) FROM ripe_ris_messages
+        WHERE timestamp >= ? AND timestamp <= ?
+        """,
+        [start_time, upper],
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
 def _ioda_signals(
     con: duckdb.DuckDBPyConnection,
     *,
@@ -233,9 +259,9 @@ def _ioda_signals(
         [cutoff],
     ).fetchall()
     signals: List[Dict[str, Any]] = []
-    # Collect distinct sources and fetch raw paths for each
     sources = {row[0] for row in rows}
     raw_paths_map = {src: _raw_paths_for_source(con, src, cutoff) for src in sources}
+    ris_available = _ripe_ris_table_exists(con)
     for source, event_id, start_time, end_time, country, asn, severity, raw_json, ingested_at in rows:
         score = _as_float(severity)
         if score is None and isinstance(raw_json, str):
@@ -250,10 +276,16 @@ def _ioda_signals(
         entity_type = "asn" if asn else "country"
         entity_id = str(asn or country or "unknown")
         summary = f"IODA outage in {entity_id}"
+        ris_count = (
+            _ripe_ris_count_in_window(con, start_time, end_time, computed_at)
+            if ris_available
+            else 0
+        )
         details = {
             "event_id": event_id,
             "country": country,
             "asn": asn,
+            "ripe_ris_live_updates_in_window": ris_count,
             "raw": raw_json,
         }
         payload = {
@@ -289,6 +321,9 @@ def _ooni_signals(
     *,
     cutoff: datetime,
     computed_at: datetime,
+    min_total: int = 10,
+    min_current_ratio: float = 0.5,
+    min_ratio_delta: float = 0.3,
 ) -> List[Dict[str, Any]]:
     window_hours = (computed_at - cutoff).total_seconds() / 3600.0
     prior_start = cutoff - timedelta(hours=window_hours)
@@ -341,7 +376,7 @@ def _ooni_signals(
         prior_ratio = 0.0
         if prior and prior[2]:
             prior_ratio = (prior[1] or 0) / float(prior[2])
-        if total < 10 or current_ratio < 0.5 or (current_ratio - prior_ratio) < 0.3:
+        if total < min_total or current_ratio < min_current_ratio or (current_ratio - prior_ratio) < min_ratio_delta:
             continue
         summary = f"OONI anomaly spike in {probe_cc}"
         details = {
@@ -457,104 +492,438 @@ def _worldbank_signals(
     return signals
 
 
+# FRED↔TD synonym map: only collapse where FRED is literally the same instrument at lower cadence.
+# Keys are the canonical entity_id (TD form); values are the list of raw series_id aliases from FRED.
+_MARKET_MOVE_CRYPTO_SYNONYMS: Dict[str, List[str]] = {
+    "BTC/USD": ["CBBTCUSD"],
+    "ETH/USD": ["CBETHUSD"],
+    "XMR/USD": ["CBXMRUSD"],
+}
+# Reverse lookup: FRED series_id -> canonical TD entity_id
+_FRED_TO_CANONICAL: Dict[str, str] = {
+    fred_id: canonical
+    for canonical, aliases in _MARKET_MOVE_CRYPTO_SYNONYMS.items()
+    for fred_id in aliases
+}
+# Source priority for tie-break when both feeds produce a candidate on the same calendar day.
+# Twelve Data is higher-cadence for Coinbase crypto pairs, so it wins.
+_MARKET_MOVE_SOURCE_PRIORITY = {"twelvedata_time_series": 1, "fred_series": 0}
+
+
+def _canonical_market_symbol(raw_symbol: str, feed: str) -> str:
+    """Map a feed-specific symbol to the canonical entity_id; non-crypto symbols pass through."""
+    if feed == "fred_series":
+        return _FRED_TO_CANONICAL.get(raw_symbol, raw_symbol)
+    return raw_symbol
+
+
 def _market_move_signals(
     con: duckdb.DuckDBPyConnection,
     *,
     cutoff: datetime,
     computed_at: datetime,
+    min_abs_return: float = 0.02,
+    severity_denominator: float = 0.10,
 ) -> List[Dict[str, Any]]:
-    """Compute market move signals based on daily returns."""
-    # Get time series data ordered by symbol and timestamp
-    rows = con.execute(
+    """Compute market move signals from Twelve Data + FRED; dedupe only same-instrument Coinbase crypto pairs."""
+    td_rows = con.execute(
         """
-        SELECT source, symbol, ts, close, raw_path, ingested_at
+        SELECT source, symbol, ts, close, raw_path, ingested_at, 'twelvedata_time_series' AS feed
         FROM twelvedata_time_series
         WHERE ts >= ?
-        ORDER BY symbol, ts DESC
         """,
         [cutoff],
     ).fetchall()
-    
+
+    fred_rows: List[tuple] = []
+    fred_table_exists = con.execute(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'fred_series_observations'"
+    ).fetchone()[0]
+    if fred_table_exists:
+        fred_rows = con.execute(
+            """
+            SELECT source,
+                   series_id AS symbol,
+                   CAST(observation_date AS TIMESTAMP) AS ts,
+                   value AS close,
+                   COALESCE(raw_path, '') AS raw_path,
+                   ingested_at,
+                   'fred_series' AS feed
+            FROM fred_series_observations
+            WHERE observation_date >= CAST(? AS DATE)
+              AND value IS NOT NULL
+            """,
+            [cutoff],
+        ).fetchall()
+
+    rows = list(td_rows) + list(fred_rows)
     if not rows:
         return []
-    
+
     signals: List[Dict[str, Any]] = []
-    
-    # Collect distinct sources and fetch raw paths for each
     sources = {row[0] for row in rows}
     raw_paths_map = {src: _raw_paths_for_source(con, src, cutoff) for src in sources}
-    
-    # Group by symbol and compute returns
-    symbol_data: Dict[str, List[tuple]] = {}
-    for source, symbol, ts, close, raw_path, ingested_at in rows:
-        if symbol not in symbol_data:
-            symbol_data[symbol] = []
-        symbol_data[symbol].append((source, ts, close, raw_path, ingested_at))
-    
-    for symbol, data_points in symbol_data.items():
-        # Sort by timestamp descending (most recent first)
-        data_points.sort(key=lambda x: x[1], reverse=True)
-        
-        if len(data_points) < 2:
+
+    grouped: Dict[str, List[tuple]] = {}
+    for source, symbol, ts, close, raw_path, ingested_at, feed in rows:
+        entity_id = _canonical_market_symbol(symbol, feed)
+        grouped.setdefault(entity_id, []).append((source, ts, close, raw_path, ingested_at, feed))
+
+    for entity_id, data_points in grouped.items():
+        per_feed: Dict[str, Dict[str, Any]] = {}
+        for feed in {dp[5] for dp in data_points}:
+            feed_points = sorted(
+                (dp for dp in data_points if dp[5] == feed),
+                key=lambda x: x[1],
+                reverse=True,
+            )
+            if len(feed_points) < 2:
+                continue
+            source_recent, ts_recent, close_recent, raw_path_recent, ingested_at, _ = feed_points[0]
+            _, ts_prev, close_prev, _, _, _ = feed_points[1]
+            if close_prev is None or close_prev == 0 or close_recent is None:
+                continue
+            daily_return = (close_recent - close_prev) / close_prev
+            abs_return = abs(daily_return)
+            if abs_return < min_abs_return:
+                continue
+            severity = min(1.0, abs_return / severity_denominator)
+            direction = "gain" if daily_return > 0 else "loss"
+            summary = f"{entity_id} {abs(daily_return)*100:.2f}% {direction}"
+            details = {
+                "symbol": entity_id,
+                "feed": feed,
+                "ts_recent": str(ts_recent),
+                "ts_prev": str(ts_prev),
+                "close_recent": close_recent,
+                "close_prev": close_prev,
+                "daily_return": daily_return,
+                "direction": direction,
+            }
+            payload = {
+                "signal_type": "market_move",
+                "source": source_recent,
+                "entity_type": "symbol",
+                "entity_id": entity_id,
+                "ts_start": str(ts_recent),
+                "summary": summary,
+            }
+            per_feed[feed] = {
+                "signal_id": _signal_id(payload),
+                "signal_type": "market_move",
+                "source": source_recent,
+                "entity_type": "symbol",
+                "entity_id": entity_id,
+                "ts_start": ts_recent,
+                "ts_end": ts_recent,
+                "severity_score": severity,
+                "summary": summary,
+                "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False),
+                "ingested_at": ingested_at,
+                "computed_at": computed_at,
+                "raw_paths": json.dumps(raw_paths_map.get(source_recent, [])),
+                "_ts_recent_date": ts_recent.date() if hasattr(ts_recent, "date") else ts_recent,
+            }
+        if not per_feed:
             continue
-        
-        # Get most recent two data points
-        source_recent, ts_recent, close_recent, raw_path_recent, ingested_at = data_points[0]
-        source_prev, ts_prev, close_prev, _, _ = data_points[1]
-        
-        if close_prev is None or close_prev == 0 or close_recent is None:
-            continue
-        
-        # Calculate daily return
-        daily_return = (close_recent - close_prev) / close_prev
-        abs_return = abs(daily_return)
-        
-        # Scale severity: 5% move = 0.5, 10% move = 1.0
-        severity = min(1.0, abs_return / 0.10)
-        
-        # Only create signal for significant moves (>2%)
-        if abs_return < 0.02:
-            continue
-        
-        direction = "gain" if daily_return > 0 else "loss"
-        summary = f"{symbol} {abs(daily_return)*100:.2f}% {direction}"
-        
-        details = {
-            "symbol": symbol,
-            "ts_recent": str(ts_recent),
-            "ts_prev": str(ts_prev),
-            "close_recent": close_recent,
-            "close_prev": close_prev,
-            "daily_return": daily_return,
-            "direction": direction,
-        }
-        
-        payload = {
-            "signal_type": "market_move",
-            "source": source_recent,
-            "entity_type": "symbol",
-            "entity_id": symbol,
-            "ts_start": str(ts_recent),
-            "summary": summary,
-        }
-        
-        signals.append({
-            "signal_id": _signal_id(payload),
-            "signal_type": "market_move",
-            "source": source_recent,
-            "entity_type": "symbol",
-            "entity_id": symbol,
-            "ts_start": ts_recent,
-            "ts_end": ts_recent,
-            "severity_score": severity,
-            "summary": summary,
-            "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False),
-            "ingested_at": ingested_at,
-            "computed_at": computed_at,
-            "raw_paths": json.dumps(raw_paths_map.get(source_recent, [])),
-        })
-    
+        if entity_id in _MARKET_MOVE_CRYPTO_SYNONYMS and len(per_feed) >= 2:
+            feeds_same_day = len({row["_ts_recent_date"] for row in per_feed.values()}) == 1
+            if feeds_same_day:
+                winning_feed = max(per_feed, key=lambda f: _MARKET_MOVE_SOURCE_PRIORITY.get(f, 0))
+                for row in [per_feed[winning_feed]]:
+                    row.pop("_ts_recent_date", None)
+                    signals.append(row)
+                continue
+        for row in per_feed.values():
+            row.pop("_ts_recent_date", None)
+            signals.append(row)
     return signals
+
+
+# NWS severity/urgency/certainty component weights. Product is clamped to [0, 1].
+# severity: Extreme=1.0, Severe=0.8, Moderate=0.5, Minor=0.3, Unknown=0.5.
+# urgency: Immediate=1.0, Expected=0.75, Future=0.5, Past=0.25, Unknown=0.5.
+# certainty: Observed=1.0, Likely=0.75, Possible=0.5, Unlikely=0.25, Unknown=0.5.
+_NWS_SEVERITY = {"Extreme": 1.0, "Severe": 0.8, "Moderate": 0.5, "Minor": 0.3, "Unknown": 0.5}
+_NWS_URGENCY = {"Immediate": 1.0, "Expected": 0.75, "Future": 0.5, "Past": 0.25, "Unknown": 0.5}
+_NWS_CERTAINTY = {"Observed": 1.0, "Likely": 0.75, "Possible": 0.5, "Unlikely": 0.25, "Unknown": 0.5}
+_NWS_FIRE_SEVERITIES = {"Severe", "Extreme"}
+
+
+def _first_ugc_zone(raw_json: Any) -> str:
+    """Return the final path segment of the first `affectedZones` URL, or 'unknown'."""
+    if not isinstance(raw_json, str) or not raw_json:
+        return "unknown"
+    try:
+        payload = json.loads(raw_json)
+    except (ValueError, TypeError):
+        return "unknown"
+    props = payload.get("properties") if isinstance(payload, dict) else None
+    if not isinstance(props, dict):
+        return "unknown"
+    zones = props.get("affectedZones")
+    if not isinstance(zones, list) or not zones:
+        return "unknown"
+    first = zones[0]
+    if not isinstance(first, str):
+        return "unknown"
+    return first.rstrip("/").rsplit("/", 1)[-1] or "unknown"
+
+
+def _weather_alert_signals(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    cutoff: datetime,
+    computed_at: datetime,
+) -> List[Dict[str, Any]]:
+    """NWS active alerts -> weather_alert signals; fires on Severe/Extreme; severity = product."""
+    if not con.execute(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'nws_alerts'"
+    ).fetchone()[0]:
+        return []
+    rows = con.execute(
+        """
+        SELECT source, alert_id, effective, sent, expires, severity, urgency, certainty,
+               event, headline, area_desc, raw_json, ingested_at
+        FROM nws_alerts
+        WHERE COALESCE(effective, sent) >= ?
+        """,
+        [cutoff],
+    ).fetchall()
+    signals: List[Dict[str, Any]] = []
+    sources = {row[0] for row in rows}
+    raw_paths_map = {src: _raw_paths_for_source(con, src, cutoff) for src in sources}
+    seen: set[tuple[str, Any]] = set()
+    for (
+        source,
+        alert_id,
+        effective,
+        sent,
+        expires,
+        severity,
+        urgency,
+        certainty,
+        event,
+        headline,
+        area_desc,
+        raw_json,
+        ingested_at,
+    ) in rows:
+        if severity not in _NWS_FIRE_SEVERITIES:
+            continue
+        score = (
+            _NWS_SEVERITY.get(severity, 0.5)
+            * _NWS_URGENCY.get(urgency or "Unknown", 0.5)
+            * _NWS_CERTAINTY.get(certainty or "Unknown", 0.5)
+        )
+        score = max(0.0, min(1.0, score))
+        ts_start = effective or sent
+        entity_id = _first_ugc_zone(raw_json)
+        key = (entity_id, ts_start)
+        if key in seen:
+            continue
+        seen.add(key)
+        summary = f"{event or 'NWS alert'} ({severity}) in {entity_id}"
+        details = {
+            "alert_id": alert_id,
+            "severity": severity,
+            "urgency": urgency,
+            "certainty": certainty,
+            "event": event,
+            "headline": headline,
+            "area_desc": area_desc,
+        }
+        payload = {
+            "signal_type": "weather_alert",
+            "source": source,
+            "entity_type": "ugc_zone",
+            "entity_id": entity_id,
+            "ts_start": str(ts_start),
+            "summary": summary,
+        }
+        signals.append(
+            {
+                "signal_id": _signal_id(payload),
+                "signal_type": "weather_alert",
+                "source": source,
+                "entity_type": "ugc_zone",
+                "entity_id": entity_id,
+                "ts_start": ts_start,
+                "ts_end": expires,
+                "severity_score": score,
+                "summary": summary,
+                "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False),
+                "ingested_at": ingested_at,
+                "computed_at": computed_at,
+                "raw_paths": json.dumps(raw_paths_map.get(source, [])),
+            }
+        )
+    return signals
+
+
+# FEMA declaration-type priors. Anything else (e.g. 'DRFM') falls through to 0.4.
+_FEMA_DECLARATION_PRIORS = {"DR": 0.8, "EM": 0.5, "FM": 0.3}
+
+
+def _disaster_declaration_signals(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    cutoff: datetime,
+    computed_at: datetime,
+) -> List[Dict[str, Any]]:
+    """OpenFEMA declarations -> disaster_declaration signals with type-based severity priors."""
+    if not con.execute(
+        "SELECT COUNT(*) FROM information_schema.tables "
+        "WHERE table_name = 'openfema_disaster_declarations'"
+    ).fetchone()[0]:
+        return []
+    rows = con.execute(
+        """
+        SELECT source, declaration_id, disaster_number, state, declaration_type,
+               declaration_date, incident_type, declaration_title,
+               incident_begin_date, incident_end_date, ingested_at
+        FROM openfema_disaster_declarations
+        WHERE declaration_date >= ?
+        """,
+        [cutoff],
+    ).fetchall()
+    signals: List[Dict[str, Any]] = []
+    sources = {row[0] for row in rows}
+    raw_paths_map = {src: _raw_paths_for_source(con, src, cutoff) for src in sources}
+    for (
+        source,
+        declaration_id,
+        disaster_number,
+        state,
+        declaration_type,
+        declaration_date,
+        incident_type,
+        declaration_title,
+        incident_begin_date,
+        incident_end_date,
+        ingested_at,
+    ) in rows:
+        score = _FEMA_DECLARATION_PRIORS.get((declaration_type or "").upper(), 0.4)
+        summary = f"FEMA {declaration_type or '?'} {declaration_id} ({incident_type or 'disaster'})"
+        details = {
+            "declaration_id": declaration_id,
+            "disaster_number": disaster_number,
+            "state": state,
+            "declaration_type": declaration_type,
+            "incident_type": incident_type,
+            "declaration_title": declaration_title,
+        }
+        payload = {
+            "signal_type": "disaster_declaration",
+            "source": source,
+            "entity_type": "fema_declaration",
+            "entity_id": declaration_id,
+            "ts_start": str(declaration_date),
+            "summary": summary,
+        }
+        signals.append(
+            {
+                "signal_id": _signal_id(payload),
+                "signal_type": "disaster_declaration",
+                "source": source,
+                "entity_type": "fema_declaration",
+                "entity_id": declaration_id,
+                "ts_start": declaration_date,
+                "ts_end": incident_end_date,
+                "severity_score": score,
+                "summary": summary,
+                "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False),
+                "ingested_at": ingested_at,
+                "computed_at": computed_at,
+                "raw_paths": json.dumps(raw_paths_map.get(source, [])),
+            }
+        )
+    return signals
+
+
+ProducerFn = Callable[..., List[Dict[str, Any]]]
+
+# Mapping of producer name -> source names in sources.toml that feed it.
+# Consumed by the source-contract test in tests/test_sources_contract.py.
+# New producers must add their source names here in the same commit.
+PRODUCER_SOURCES: Dict[str, List[str]] = {
+    "earthquake": ["usgs_all_day", "usgs_catalog_m45_day"],
+    "gdacs": ["gdacs_alerts"],
+    "ioda": ["caida_ioda_recent", "ripe_ris_live_10s"],
+    "ooni": ["ooni_us_recent"],
+    "worldbank": ["worldbank_macro_fiscal"],
+    "market_move": [
+        "twelvedata_watchlist_daily",
+        "fred_macro_watchlist",
+        "fred_crypto_fx",
+    ],
+    "weather_alert": ["nws_alerts_active"],
+    "disaster_declaration": ["openfema_disaster_declarations"],
+}
+
+# Module-level registry: ordered list of (name, adapter) where each adapter has the
+# uniform signature `(con, *, cutoff, computed_at, **config) -> list[SignalRow]`.
+# Adapters pull their thresholds from `config["thresholds"][<signal_type>]`, falling
+# back to the producer's kwarg defaults if a key is missing.
+PRODUCERS: List[tuple[str, ProducerFn]] = [
+    (
+        "earthquake",
+        lambda con, *, cutoff, computed_at, **cfg: _earthquake_signals(
+            con,
+            cutoff=cutoff,
+            min_magnitude=cfg["thresholds"].get("earthquake", {}).get("min_magnitude", cfg["min_magnitude"]),
+            computed_at=computed_at,
+        ),
+    ),
+    (
+        "gdacs",
+        lambda con, *, cutoff, computed_at, **cfg: _gdacs_signals(
+            con,
+            cutoff=cutoff,
+            min_severity=cfg["thresholds"].get("gdacs", {}).get("min_severity", cfg["gdacs_min_severity"]),
+            computed_at=computed_at,
+        ),
+    ),
+    (
+        "ioda",
+        lambda con, *, cutoff, computed_at, **cfg: _ioda_signals(
+            con, cutoff=cutoff, computed_at=computed_at
+        ),
+    ),
+    (
+        "ooni",
+        lambda con, *, cutoff, computed_at, **cfg: _ooni_signals(
+            con, cutoff=cutoff, computed_at=computed_at, **cfg["thresholds"].get("ooni", {})
+        ),
+    ),
+    (
+        "worldbank",
+        lambda con, *, cutoff, computed_at, **cfg: _worldbank_signals(
+            con, cutoff=cutoff, computed_at=computed_at, db_path=cfg["db_path"]
+        ),
+    ),
+    (
+        "market_move",
+        lambda con, *, cutoff, computed_at, **cfg: _market_move_signals(
+            con, cutoff=cutoff, computed_at=computed_at, **cfg["thresholds"].get("market_move", {})
+        ),
+    ),
+    (
+        "weather_alert",
+        lambda con, *, cutoff, computed_at, **cfg: _weather_alert_signals(
+            con, cutoff=cutoff, computed_at=computed_at
+        ),
+    ),
+    (
+        "disaster_declaration",
+        lambda con, *, cutoff, computed_at, **cfg: _disaster_declaration_signals(
+            con, cutoff=cutoff, computed_at=computed_at
+        ),
+    ),
+]
+
+
+DEFAULT_SOURCES_PATH = Path("sources.toml")
 
 
 def compute_signals(
@@ -564,22 +933,29 @@ def compute_signals(
     min_magnitude: float = 5.0,
     gdacs_min_severity: float = 0.6,
     computed_at: datetime | None = None,
+    config_path: Path | None = None,
 ) -> int:
+    from .sources import load_signal_thresholds
+
     computed_at = computed_at or datetime.now(timezone.utc)
     cutoff = computed_at - parse_since(since)
     db_path_obj = Path(db_path)
     init_db(db_path_obj)
+    resolved_config_path = config_path if config_path is not None else (
+        DEFAULT_SOURCES_PATH if DEFAULT_SOURCES_PATH.exists() else None
+    )
+    thresholds = load_signal_thresholds(resolved_config_path)
     con = duckdb.connect(str(db_path_obj))
     try:
+        config: Dict[str, Any] = {
+            "min_magnitude": min_magnitude,
+            "gdacs_min_severity": gdacs_min_severity,
+            "db_path": db_path_obj,
+            "thresholds": thresholds,
+        }
         signals: List[Dict[str, Any]] = []
-        signals.extend(
-            _earthquake_signals(con, cutoff=cutoff, min_magnitude=min_magnitude, computed_at=computed_at)
-        )
-        signals.extend(_gdacs_signals(con, cutoff=cutoff, min_severity=gdacs_min_severity, computed_at=computed_at))
-        signals.extend(_ioda_signals(con, cutoff=cutoff, computed_at=computed_at))
-        signals.extend(_ooni_signals(con, cutoff=cutoff, computed_at=computed_at))
-        signals.extend(_worldbank_signals(con, cutoff=cutoff, computed_at=computed_at, db_path=db_path_obj))
-        signals.extend(_market_move_signals(con, cutoff=cutoff, computed_at=computed_at))
+        for _name, producer in PRODUCERS:
+            signals.extend(producer(con, cutoff=cutoff, computed_at=computed_at, **config))
         return upsert_signals(db_path_obj, signals)
     finally:
         con.close()

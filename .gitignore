@@ -20,6 +20,7 @@ data/exports/
 .DS_Store
 .vscode/
 .cursor/
+.claude/
 
 # Local virtualenvs
 \#/
