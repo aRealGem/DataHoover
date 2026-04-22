@@ -34,6 +34,30 @@ def _raw_path(data_dir: Path, source_name: str, year: int, ts: datetime) -> Path
     return data_dir / "raw" / source_name / f"acs_{year}_{safe_ts}.json"
 
 
+def _census_get_array_payload(
+    *,
+    url: str,
+    params: Dict[str, Any],
+    timeout_s: float,
+) -> list[Any]:
+    headers = {"User-Agent": USER_AGENT}
+    with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
+        response = client.get(url, params=params, headers=headers)
+    response.raise_for_status()
+    text = response.text.strip()
+    if not text.startswith("["):
+        raise ValueError(
+            f"Census returned non-JSON array (status={response.status_code}): {text[:240]!r}"
+        )
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Census JSON decode failed: {text[:240]!r}") from exc
+    if not isinstance(payload, list) or not payload:
+        raise ValueError(f"Unexpected Census response for URL: {payload!r}")
+    return payload
+
+
 def fetch_census_acs_json(
     *,
     year: int,
@@ -43,23 +67,30 @@ def fetch_census_acs_json(
     api_key: str | None,
     timeout_s: float = HTTP_TIMEOUT_S,
 ) -> list[Any]:
-    """GET ACS JSON array-of-arrays (header row + data rows)."""
+    """GET ACS JSON array-of-arrays (header row + data rows).
+
+    If ``CENSUS_API_KEY`` is set but rejected (302/empty body/HTML), retry once without ``key=``
+    so small anonymous queries still succeed.
+    """
     get_cols = ["NAME"] + list(variables)
-    params: Dict[str, Any] = {
+    params_base: Dict[str, Any] = {
         "get": ",".join(get_cols),
         "for": geo_for,
     }
-    if api_key:
-        params["key"] = api_key
     url = census_acs_url(year=year, dataset=dataset)
-    headers = {"User-Agent": USER_AGENT}
-    with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
-        response = client.get(url, params=params, headers=headers)
-    response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, list) or not payload:
-        raise ValueError(f"Unexpected Census response for {year} {dataset}: {payload!r}")
-    return payload
+    if api_key:
+        try:
+            return _census_get_array_payload(
+                url=url,
+                params={**params_base, "key": api_key},
+                timeout_s=timeout_s,
+            )
+        except (ValueError, json.JSONDecodeError):
+            print(
+                "[census_acs] Warning: request with CENSUS_API_KEY did not return a JSON array; "
+                "retrying without key (check key at https://api.census.gov/data/key_signup.html)."
+            )
+    return _census_get_array_payload(url=url, params=params_base, timeout_s=timeout_s)
 
 
 def _parse_acs_grid(

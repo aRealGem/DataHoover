@@ -45,12 +45,17 @@ def test_parse_acs_grid_expands_variables(census_grid):
 def test_fetch_census_includes_key_only_when_set(monkeypatch):
     captured: list[dict] = []
 
+    _grid_json = '[["NAME","B01003_001E","state"],["CA","1","06"]]'
+
     class FakeResponse:
+        status_code = 200
+
         def raise_for_status(self) -> None:
             return None
 
-        def json(self):
-            return [["NAME", "B01003_001E", "state"], ["CA", "1", "06"]]
+        @property
+        def text(self) -> str:
+            return _grid_json
 
     class FakeClient:
         def __init__(self, *args, **kwargs) -> None:
@@ -85,6 +90,63 @@ def test_fetch_census_includes_key_only_when_set(monkeypatch):
         api_key=None,
     )
     assert "key" not in captured[1]
+
+
+def test_fetch_census_retries_without_key_when_key_returns_non_json(monkeypatch, capsys):
+    captured: list[dict] = []
+    call = {"n": 0}
+
+    class FakeResponseBad:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        @property
+        def text(self) -> str:
+            return "<html><body>redirect</body></html>"
+
+    class FakeResponseGood:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        @property
+        def text(self) -> str:
+            return '[["NAME","B01003_001E","state"],["CA","1","06"]]'
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def get(self, url, params=None, headers=None):
+            captured.append(dict(params or {}))
+            call["n"] += 1
+            if call["n"] == 1:
+                return FakeResponseBad()
+            return FakeResponseGood()
+
+    monkeypatch.setattr(census.httpx, "Client", FakeClient)
+
+    out = census.fetch_census_acs_json(
+        year=2022,
+        dataset="acs5",
+        variables=["B01003_001E"],
+        geo_for="state:06",
+        api_key="bad-key",
+    )
+    assert len(captured) == 2
+    assert captured[0].get("key") == "bad-key"
+    assert "key" not in captured[1]
+    assert out[1][0] == "CA"
+    assert "retrying without key" in capsys.readouterr().out
 
 
 def test_ingest_census_roundtrip(monkeypatch, tmp_path, census_grid):

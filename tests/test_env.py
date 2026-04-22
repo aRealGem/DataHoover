@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import os
 from pathlib import Path
 
@@ -32,6 +31,25 @@ def test_get_secret_reads_env_file(monkeypatch, tmp_path: Path):
 def test_fred_key_configured():
     key = env.get_secret("FRED_API_KEY")
     assert key, "FRED_API_KEY missing — add it to .env or export the variable"
+
+
+def test_bls_api_key_configured():
+    """Diagnostics: BLS v2 ingest uses BLS_API_KEY (see docs/lookup.md)."""
+    key = env.get_secret("BLS_API_KEY")
+    assert key, "BLS_API_KEY missing — add it to .env or export the variable"
+
+
+def test_census_api_key_configured():
+    """Diagnostics: Census key improves reliability for ACS ingest."""
+    key = env.get_secret("CENSUS_API_KEY")
+    assert key, "CENSUS_API_KEY missing — add it to .env or export the variable"
+
+
+def test_truthbot_ingest_keys_accessible_via_get_secret():
+    """Resolve primary-source keys without asserting secret values."""
+    for name in ("FRED_API_KEY", "BLS_API_KEY", "CENSUS_API_KEY"):
+        v = env.get_secret(name)
+        assert v and isinstance(v, str) and len(v.strip()) > 0, f"{name} must be a non-empty string"
 
 
 def test_get_secret_populates_env_for_fred(monkeypatch, tmp_path: Path):
