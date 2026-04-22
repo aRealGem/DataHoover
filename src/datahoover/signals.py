@@ -642,6 +642,22 @@ def _market_move_signals(
 
 ProducerFn = Callable[..., List[Dict[str, Any]]]
 
+# Mapping of producer name -> source names in sources.toml that feed it.
+# Consumed by the source-contract test in tests/test_sources_contract.py.
+# New producers must add their source names here in the same commit.
+PRODUCER_SOURCES: Dict[str, List[str]] = {
+    "earthquake": ["usgs_all_day", "usgs_catalog_m45_day"],
+    "gdacs": ["gdacs_alerts"],
+    "ioda": ["caida_ioda_recent", "ripe_ris_live_10s"],
+    "ooni": ["ooni_us_recent"],
+    "worldbank": ["worldbank_macro_fiscal"],
+    "market_move": [
+        "twelvedata_watchlist_daily",
+        "fred_macro_watchlist",
+        "fred_crypto_fx",
+    ],
+}
+
 # Module-level registry: ordered list of (name, adapter) where each adapter has the
 # uniform signature `(con, *, cutoff, computed_at, **config) -> list[SignalRow]`.
 # Adapters pull their thresholds from `config["thresholds"][<signal_type>]`, falling

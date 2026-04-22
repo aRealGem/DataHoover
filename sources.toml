@@ -15,18 +15,21 @@ name = "eurostat_gdp"
 kind = "eurostat_statistics_json"
 url = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/nama_10_gdp?time=2020&geo=EU27_2020&unit=CLV10_MEUR&na_item=B1GQ&format=JSON"
 description = "Eurostat GDP (EU27 2020, 2020, chain-linked volume)."
+purpose = "raw_only"
 
 [[sources]]
 name = "openfema_disaster_declarations"
 kind = "openfema_disaster_declarations"
 url = "https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?$top=1000&$select=femaDeclarationString,disasterNumber,state,declarationType,declarationDate,incidentType,declarationTitle,incidentBeginDate,incidentEndDate"
 description = "OpenFEMA disaster declarations (summary fields)."
+purpose = "raw_only"
 
 [[sources]]
 name = "nws_alerts_active"
 kind = "nws_alerts_active"
 url = "https://api.weather.gov/alerts/active?status=actual"
 description = "NWS active alerts (weather.gov API)."
+purpose = "raw_only"
 
 [[sources]]
 name = "gdacs_alerts"
@@ -39,6 +42,7 @@ name = "worldbank_gdp_usa"
 kind = "worldbank_indicator"
 url = "https://api.worldbank.org/v2/country/USA/indicator/NY.GDP.MKTP.CD?format=json&per_page=20000&date=2020:2026"
 description = "World Bank GDP (current US$) for USA (2020-2026)."
+purpose = "raw_only"
 
 [[sources]]
 name = "worldbank_macro_fiscal"
@@ -51,18 +55,21 @@ name = "datagov_catalog_climate"
 kind = "ckan_package_search"
 url = "https://catalog.data.gov/api/3/action/package_search?q=climate&rows=50"
 description = "Data.gov catalog CKAN package_search for 'climate' (50 results)."
+purpose = "catalog"
 
 [[sources]]
 name = "hdx_catalog_cholera"
 kind = "ckan_package_search"
 url = "https://data.humdata.org/api/3/action/package_search?q=cholera&rows=50"
 description = "HDX catalog CKAN package_search for 'cholera' (50 results)."
+purpose = "catalog"
 
 [[sources]]
 name = "socrata_example"
 kind = "socrata_soda"
 url = "https://data.cityofnewyork.us/resource/erm2-nwe9.json?$limit=50"
 description = "Socrata SODA example (NYC 311, 50 records)."
+purpose = "catalog"
 
 [[sources]]
 name = "opendatasoft_example"
@@ -70,12 +77,14 @@ kind = "opendatasoft_explore"
 # Note: this dataset endpoint is confirmed working with the Explore v2.1 API.
 url = "https://public.opendatasoft.com/api/explore/v2.1/catalog/datasets/geonames-all-cities-with-a-population-1000/records?limit=50"
 description = "Opendatasoft Explore API example (geonames cities, 50 records)."
+purpose = "catalog"
 
 [[sources]]
 name = "gdelt_democracy_24h"
 kind = "gdelt_doc_query"
 url = "https://api.gdeltproject.org/api/v2/doc/doc?query=democracy&mode=artlist&maxrecords=50&format=json&timespan=1day"
 description = "GDELT doc API query for 'democracy' (last 24h, 50 records)."
+purpose = "raw_only"
 
 [[sources]]
 name = "ooni_us_recent"
@@ -100,6 +109,7 @@ name = "ripe_atlas_probes"
 kind = "ripe_atlas_probes"
 url = "https://atlas.ripe.net/api/v2/probes/?page=1&page_size=50"
 description = "RIPE Atlas probe metadata (page 1, 50 probes)."
+purpose = "raw_only"
 
 [[sources]]
 name = "twelvedata_watchlist_daily"

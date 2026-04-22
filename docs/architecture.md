@@ -50,6 +50,10 @@ Each pipeline is: one or more raw sources → one producer function → rows in 
 
 `compute_signals` iterates `signals.PRODUCERS`, a module-level ordered list of `(name, adapter)` pairs. Each adapter has the uniform signature `(con, *, cutoff, computed_at, **config) -> list[SignalRow]` and delegates to the underlying producer function. New producers append to this list in commit order.
 
+## Source contract
+
+[`signals.PRODUCER_SOURCES`](../src/datahoover/signals.py) maps each producer name to the `[[sources]]` entries it consumes. [`tests/test_sources_contract.py`](../tests/test_sources_contract.py) asserts that every source in `sources.toml` is either (a) named in `PRODUCER_SOURCES`, or (b) tagged `purpose = "catalog"` / `purpose = "raw_only"`. Sources tagged `catalog` describe search endpoints for dataset discovery; sources tagged `raw_only` are ingested for manual review but do not currently feed a signal producer.
+
 ## Thresholds
 
 Hardcoded thresholds are declared as defaults in `SIGNAL_THRESHOLD_DEFAULTS` (see [`src/datahoover/sources.py`](../src/datahoover/sources.py)) and can be overridden per-type in `[signals.<type>]` TOML blocks inside [`sources.toml`](../sources.toml). `load_signal_thresholds(path)` merges file overrides over defaults so omitting any section yields byte-identical output to the pre-externalization behavior.
