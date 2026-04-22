@@ -96,7 +96,7 @@ All producers write into DuckDB table **`signals`**: 13 columns (`signal_id`, `s
 - `hoover alert` — prints matching signals to stdout (grouped by type).
 - `hoover snapshot` — zips `raw/`, `state/`, and the DuckDB file, or writes one Parquet file per table under a stamped directory (see `--format` / `--output` in the CLI).
 - Example Parquet path after `hoover snapshot --format parquet`: `data/snapshots/snapshot-<stamp>/signals.parquet`.
-- **No** in-repo web dashboards, maps, or notebooks for signals today.
+- **Static dashboard (local):** after ingesting into `data/warehouse.duckdb`, run `python scripts/build_dashboard.py` to emit `data/dashboard/index.html` (gitignored). The page embeds signals + map/timeline/sparkline context; open the file in a browser. Use `./scripts/run-full-pipeline.sh` for a best-effort full ingest + `compute-signals --since 7d` first.
 
 ## Dark sources — ingested, no signal producer wired
 
