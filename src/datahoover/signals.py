@@ -218,6 +218,32 @@ def _gdacs_signals(
     return signals
 
 
+def _ripe_ris_table_exists(con: duckdb.DuckDBPyConnection) -> bool:
+    """Return True iff ripe_ris_messages table has been created in the current DB."""
+    return bool(
+        con.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'ripe_ris_messages'"
+        ).fetchone()[0]
+    )
+
+
+def _ripe_ris_count_in_window(
+    con: duckdb.DuckDBPyConnection, start_time: Any, end_time: Any, computed_at: datetime
+) -> int:
+    """Count RIPE RIS messages whose timestamp falls in [start_time, COALESCE(end_time, computed_at)]."""
+    if start_time is None:
+        return 0
+    upper = end_time if end_time is not None else computed_at
+    row = con.execute(
+        """
+        SELECT COUNT(*) FROM ripe_ris_messages
+        WHERE timestamp >= ? AND timestamp <= ?
+        """,
+        [start_time, upper],
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
 def _ioda_signals(
     con: duckdb.DuckDBPyConnection,
     *,
@@ -233,9 +259,9 @@ def _ioda_signals(
         [cutoff],
     ).fetchall()
     signals: List[Dict[str, Any]] = []
-    # Collect distinct sources and fetch raw paths for each
     sources = {row[0] for row in rows}
     raw_paths_map = {src: _raw_paths_for_source(con, src, cutoff) for src in sources}
+    ris_available = _ripe_ris_table_exists(con)
     for source, event_id, start_time, end_time, country, asn, severity, raw_json, ingested_at in rows:
         score = _as_float(severity)
         if score is None and isinstance(raw_json, str):
@@ -250,10 +276,16 @@ def _ioda_signals(
         entity_type = "asn" if asn else "country"
         entity_id = str(asn or country or "unknown")
         summary = f"IODA outage in {entity_id}"
+        ris_count = (
+            _ripe_ris_count_in_window(con, start_time, end_time, computed_at)
+            if ris_available
+            else 0
+        )
         details = {
             "event_id": event_id,
             "country": country,
             "asn": asn,
+            "ripe_ris_live_updates_in_window": ris_count,
             "raw": raw_json,
         }
         payload = {

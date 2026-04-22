@@ -21,9 +21,10 @@ Each pipeline is: one or more raw sources → one producer function → rows in 
 
 ### 3. Internet outages → `_ioda_signals`
 
-*Severity normalized from CAIDA IODA outage event fields to 0..1.*
+*Severity normalized from CAIDA IODA outage event fields to 0..1. `details_json` is enriched with `ripe_ris_live_updates_in_window` — a count of `ripe_ris_messages` rows whose `timestamp` falls within `[start_time, COALESCE(end_time, computed_at)]`. Severity math is unchanged.*
 
 - `caida_ioda_recent` — BGP-derived outage events (defaults: last 24h).
+- `ripe_ris_live_10s` — RIPE RIS Live BGP updates (enrichment only; no separate signal).
 
 ### 4. Censorship spike → `_ooni_signals` (`signal_type`: `censorship_spike`)
 
@@ -68,6 +69,6 @@ These have connectors and tables in [`duckdb_store.py`](../src/datahoover/storag
 | Macro & markets (extra / unsignaled) | `eurostat_gdp`, `worldbank_gdp_usa` |
 | Catalog / discovery | `datagov_catalog_climate`, `hdx_catalog_cholera`, `socrata_example`, `opendatasoft_example` |
 | News | `gdelt_democracy_24h` |
-| Network measurement | `ripe_ris_live_10s`, `ripe_atlas_probes` |
+| Network measurement | `ripe_atlas_probes` |
 
-That is **11** dark sources vs **9** source rows that feed the six pipelines above (20 total `[[sources]]` blocks in `sources.toml`).
+That is **9** dark sources vs **10** source rows that feed the six pipelines above (`ripe_ris_live_10s` enriches IODA but is not an independent signal). The file has 20 total `[[sources]]` blocks.
