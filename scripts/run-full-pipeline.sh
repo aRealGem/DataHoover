@@ -16,7 +16,7 @@ Usage: ./scripts/run-full-pipeline.sh
 
   Writes a per-step report to data/snapshots/last-pipeline-run.txt
 
-  Environment: PYTHONPATH is set to ./src if `hoover` is not on PATH.
+  Environment: PYTHONPATH is set to ./src if `hoover` is not on PATH (uses python3, else python).
 USAGE
   exit 0
 fi
@@ -25,7 +25,11 @@ if command -v hoover >/dev/null 2>&1; then
   HOOVER=(hoover)
 else
   export PYTHONPATH="${ROOT}/src:${PYTHONPATH:-}"
-  HOOVER=(python -m datahoover.cli)
+  if command -v python3 >/dev/null 2>&1; then
+    HOOVER=(python3 -m datahoover.cli)
+  else
+    HOOVER=(python -m datahoover.cli)
+  fi
 fi
 
 REPORT_DIR="${ROOT}/data/snapshots"
