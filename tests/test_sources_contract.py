@@ -11,12 +11,18 @@ except ImportError:  # pragma: no cover
 from datahoover.signals import PRODUCER_SOURCES, PRODUCERS
 
 ALLOWED_PURPOSES = {"catalog", "raw_only"}
-SOURCES_TOML = Path(__file__).resolve().parents[1] / "sources.toml"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SOURCES_TOML = REPO_ROOT / "sources.toml"
+CATALOGS_TOML = REPO_ROOT / "catalogs.toml"
 
 
 def _load_sources_blocks() -> list[dict]:
-    data = tomllib.loads(SOURCES_TOML.read_text(encoding="utf-8"))
-    return data.get("sources", [])
+    """Return the merged `[[sources]]` view across sources.toml and catalogs.toml."""
+    blocks: list[dict] = []
+    blocks.extend(tomllib.loads(SOURCES_TOML.read_text(encoding="utf-8")).get("sources", []))
+    if CATALOGS_TOML.exists():
+        blocks.extend(tomllib.loads(CATALOGS_TOML.read_text(encoding="utf-8")).get("sources", []))
+    return blocks
 
 
 def test_every_source_is_wired_or_tagged():

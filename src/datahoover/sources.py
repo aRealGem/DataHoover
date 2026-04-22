@@ -30,25 +30,38 @@ class Source:
     extra: Dict[str, any] | None = None
 
 
-def load_sources(path: Path) -> Dict[str, Source]:
-    if not path.exists():
-        raise FileNotFoundError(f"Missing config: {path}")
+CATALOGS_FILENAME = "catalogs.toml"
 
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
-    sources: List[dict] = data.get("sources", [])
+
+def _parse_source_blocks(raw_blocks: List[dict]) -> Dict[str, Source]:
     out: Dict[str, Source] = {}
-    for s in sources:
-        # Extract extra fields (everything not in the base Source fields)
+    for s in raw_blocks:
         extra = {k: v for k, v in s.items() if k not in {"name", "kind", "url", "description"}}
         src = Source(
             name=s["name"],
             kind=s["kind"],
-            url=s.get("url", ""),  # URL is optional for some sources like twelvedata
+            url=s.get("url", ""),
             description=s.get("description"),
             extra=extra if extra else None,
         )
         out[src.name] = src
     return out
+
+
+def load_sources(path: Path) -> Dict[str, Source]:
+    """Load `[[sources]]` from `path` and auto-merge any sibling `catalogs.toml`."""
+    if not path.exists():
+        raise FileNotFoundError(f"Missing config: {path}")
+
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    blocks: List[dict] = list(data.get("sources", []))
+
+    catalogs_path = path.parent / CATALOGS_FILENAME
+    if catalogs_path.exists():
+        catalogs_data = tomllib.loads(catalogs_path.read_text(encoding="utf-8"))
+        blocks.extend(catalogs_data.get("sources", []))
+
+    return _parse_source_blocks(blocks)
 
 
 def load_signal_thresholds(path: Path | None) -> Dict[str, Dict[str, Any]]:

@@ -1,6 +1,6 @@
 # DataHoover architecture
 
-This page describes how configured **sources** in [`sources.toml`](../sources.toml) flow into **signal producers** in [`src/datahoover/signals.py`](../src/datahoover/signals.py), the unified **`signals`** table, and what you can run or export today. It is plain Markdown so it renders the same everywhere (IDE, GitHub, etc.).
+This page describes how configured **sources** in [`sources.toml`](../sources.toml) (auto-merged with [`catalogs.toml`](../catalogs.toml) for catalog endpoints) flow into **signal producers** in [`src/datahoover/signals.py`](../src/datahoover/signals.py), the unified **`signals`** table, and what you can run or export today. It is plain Markdown so it renders the same everywhere (IDE, GitHub, etc.).
 
 ## Active signal pipelines
 
@@ -102,11 +102,15 @@ All producers write into DuckDB table **`signals`**: 13 columns (`signal_id`, `s
 
 These have connectors and tables in [`duckdb_store.py`](../src/datahoover/storage/duckdb_store.py) but **no** corresponding producer in `compute_signals`:
 
-| Category | Source names (`sources.toml`) |
-|----------|--------------------------------|
-| Macro & markets (extra / unsignaled) | `eurostat_gdp`, `worldbank_gdp_usa` |
-| Catalog / discovery | `datagov_catalog_climate`, `hdx_catalog_cholera`, `socrata_example`, `opendatasoft_example` |
-| News | `gdelt_democracy_24h` |
-| Network measurement | `ripe_atlas_probes` |
+| Category | File | Source names |
+|----------|------|--------------|
+| Macro & markets (extra / unsignaled) | `sources.toml` | `eurostat_gdp`, `worldbank_gdp_usa` |
+| Catalog / discovery | `catalogs.toml` | `datagov_catalog_climate`, `hdx_catalog_cholera`, `socrata_example`, `opendatasoft_example` |
+| News | `sources.toml` | `gdelt_democracy_24h` |
+| Network measurement | `sources.toml` | `ripe_atlas_probes` |
 
-That is **7** dark sources vs **12** source rows that feed the eight pipelines above (`ripe_ris_live_10s` enriches IODA but is not an independent signal). The file has 20 total `[[sources]]` blocks.
+That is **7** dark sources vs **12** source rows that feed the eight pipelines above (`ripe_ris_live_10s` enriches IODA but is not an independent signal). The merged view across `sources.toml` (16 blocks) and `catalogs.toml` (4 blocks) still totals 20.
+
+### Catalog split
+
+Catalog sources describe dataset-search endpoints (CKAN `package_search`, Socrata SODA discovery, Opendatasoft Explore catalog) rather than substantive data feeds. They live in `catalogs.toml`; [`load_sources`](../src/datahoover/sources.py) transparently merges any sibling `catalogs.toml` at load time, so `hoover ingest-ckan` / `ingest-socrata` / `ingest-opendatasoft` keep finding the same names without any new CLI surface.
