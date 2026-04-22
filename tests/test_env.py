@@ -32,3 +32,13 @@ def test_get_secret_reads_env_file(monkeypatch, tmp_path: Path):
 def test_fred_key_configured():
     key = env.get_secret("FRED_API_KEY")
     assert key, "FRED_API_KEY missing — add it to .env or export the variable"
+
+
+def test_get_secret_populates_env_for_fred(monkeypatch, tmp_path: Path):
+    fake_env = tmp_path / 'fred.env'
+    fake_env.write_text('FRED_API_KEY=from-env-file', encoding='utf-8')
+    monkeypatch.setenv('DATAHOOVER_ENV_FILE', str(fake_env))
+    monkeypatch.delenv('FRED_API_KEY', raising=False)
+    value = env.get_secret('FRED_API_KEY')
+    assert value == 'from-env-file'
+    assert os.environ['FRED_API_KEY'] == 'from-env-file'

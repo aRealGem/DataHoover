@@ -104,7 +104,28 @@ description = "RIPE Atlas probe metadata (page 1, 50 probes)."
 [[sources]]
 name = "twelvedata_watchlist_daily"
 kind = "twelvedata_time_series"
-description = "Twelve Data daily time series for watchlist symbols (requires TWELVEDATA_API_KEY)."
-symbols = ["SPY", "QQQ", "IWM", "DIA", "TLT", "EUR/USD", "BTC/USD"]
+description = "Twelve Data watchlist for equity ETFs, metals, crypto, and FX pairs (requires TWELVEDATA_API_KEY)."
+symbols = ["SPY", "QQQ", "DIA", "IWM", "GLD", "BTC/USD", "XMR/USD", "ETH/USD", "EUR/USD", "GBP/USD", "JPY/USD", "CHF/USD", "AUD/USD", "CAD/USD"]
+quarterly_symbols = ["SPY", "QQQ", "DIA", "IWM", "GLD"]
+quarter_interval = "1month"
 interval = "1day"
 outputsize = 30
+
+
+[[sources]]
+name = "fred_macro_watchlist"
+kind = "fred_series"
+url = "https://api.stlouisfed.org/fred/series/observations"
+description = "FRED macro + FX watchlist (SP500, DJIA, NASDAQ, gold, USD cross rates)."
+series_ids = ["SP500", "DJIA", "NASDAQCOM", "GOLDAMGBD228NLBM", "DEXUSEU", "DEXUSUK", "DEXUSAL", "DEXJPUS"]
+frequency = "daily"
+limit = 180
+
+[[sources]]
+name = "fred_crypto_fx"
+kind = "fred_series"
+url = "https://api.stlouisfed.org/fred/series/observations"
+description = "FRED Coinbase crypto reference rates (BTC, ETH, experimental XMR)."
+series_ids = ["CBBTCUSD", "CBETHUSD", "CBXMRUSD"]
+frequency = "daily"
+limit = 120

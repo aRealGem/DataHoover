@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Tuple
 
 import httpx
 
@@ -15,6 +15,10 @@ from ..env import get_secret
 from ..storage.duckdb_store import init_db, upsert_twelvedata_time_series, log_run
 from ..sources import load_sources, Source
 from ._retry import fetch_with_retry
+
+PRIMARY_GROUP = "primary"
+QUARTERLY_GROUP = "quarterly"
+QUARTER_INTERVAL_FALLBACK = "1week"
 
 
 @dataclass(frozen=True)
@@ -45,6 +49,17 @@ def _save_state(path: Path, state: Dict[str, Any]) -> None:
     path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _dedupe(seq: List[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for item in seq:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
 def fetch_time_series(
     symbol: str,
     *,
@@ -71,12 +86,12 @@ def fetch_time_series(
     r.raise_for_status()
     raw = r.content
     data = r.json()
-    
+
     # Check for API error response
     if isinstance(data, dict) and data.get("status") == "error":
         error_msg = data.get("message", "Unknown API error")
         raise ValueError(f"Twelve Data API error for {symbol}: {error_msg}")
-    
+
     return FetchResult(
         status_code=r.status_code,
         symbol=symbol,
@@ -92,37 +107,32 @@ def _normalize_time_series(
     response: Dict[str, Any],
     ingested_at: datetime,
     raw_path: str,
+    *,
+    series_group: str = PRIMARY_GROUP,
 ) -> List[Dict[str, Any]]:
     """Normalize Twelve Data time series response into table rows."""
     rows: List[Dict[str, Any]] = []
-    
-    # Extract metadata
+
     meta = response.get("meta", {})
     currency = meta.get("currency")
     exchange = meta.get("exchange_name") or meta.get("exchange")
-    
-    # Extract values array
+
     values = response.get("values", [])
-    
+
     for entry in values:
-        # Parse datetime - Twelve Data returns YYYY-MM-DD HH:MM:SS format
         datetime_str = entry.get("datetime")
         if not datetime_str:
             continue
-        
-        # Try parsing as date or datetime
+
         ts = None
         try:
             if " " in datetime_str:
-                # Has time component
                 ts = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
             else:
-                # Date only
                 ts = datetime.strptime(datetime_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         except (ValueError, AttributeError):
             continue
-        
-        # Parse numeric fields
+
         try:
             open_val = float(entry["open"]) if entry.get("open") else None
             high_val = float(entry["high"]) if entry.get("high") else None
@@ -130,30 +140,33 @@ def _normalize_time_series(
             close_val = float(entry["close"]) if entry.get("close") else None
         except (ValueError, KeyError):
             continue
-        
+
         volume_val = None
         if entry.get("volume"):
             try:
                 volume_val = int(entry["volume"])
             except (ValueError, TypeError):
                 pass
-        
-        rows.append({
-            "source": source.name,
-            "symbol": symbol,
-            "interval": interval,
-            "ts": ts,
-            "open": open_val,
-            "high": high_val,
-            "low": low_val,
-            "close": close_val,
-            "volume": volume_val,
-            "currency": currency,
-            "exchange": exchange,
-            "ingested_at": ingested_at,
-            "raw_path": raw_path,
-        })
-    
+
+        rows.append(
+            {
+                "source": source.name,
+                "symbol": symbol,
+                "interval": interval,
+                "series_group": series_group,
+                "ts": ts,
+                "open": open_val,
+                "high": high_val,
+                "low": low_val,
+                "close": close_val,
+                "volume": volume_val,
+                "currency": currency,
+                "exchange": exchange,
+                "ingested_at": ingested_at,
+                "raw_path": raw_path,
+            }
+        )
+
     return rows
 
 
@@ -161,7 +174,15 @@ def _get_api_key_from_keychain() -> Optional[str]:
     """Try to retrieve API key from macOS Keychain."""
     try:
         result = subprocess.run(
-            ["security", "find-generic-password", "-a", os.environ.get("USER", ""), "-s", "TWELVEDATA_API_KEY", "-w"],
+            [
+                "security",
+                "find-generic-password",
+                "-a",
+                os.environ.get("USER", ""),
+                "-s",
+                "TWELVEDATA_API_KEY",
+                "-w",
+            ],
             capture_output=True,
             text=True,
             timeout=5,
@@ -173,18 +194,49 @@ def _get_api_key_from_keychain() -> Optional[str]:
     return None
 
 
+def _fetch_with_optional_fallback(
+    *,
+    api_key: str,
+    symbol: str,
+    requested_interval: str,
+    outputsize: int,
+    series_group: str,
+) -> Tuple[FetchResult, str]:
+    def _attempt(interval: str) -> Tuple[FetchResult, str]:
+        fr = fetch_with_retry(
+            lambda: fetch_time_series(
+                symbol,
+                api_key=api_key,
+                interval=interval,
+                outputsize=outputsize,
+            )
+        )
+        if fr.data is None:
+            raise ValueError("Empty Twelve Data response")
+        return fr, interval
+
+    try:
+        return _attempt(requested_interval)
+    except (ValueError, httpx.HTTPStatusError) as exc:
+        if series_group != QUARTERLY_GROUP or requested_interval == QUARTER_INTERVAL_FALLBACK:
+            raise
+        print(
+            f"[twelvedata] Warning: {symbol} interval '{requested_interval}' unsupported ({exc}); falling back to {QUARTER_INTERVAL_FALLBACK}"
+        )
+        return _attempt(QUARTER_INTERVAL_FALLBACK)
+
+
 def ingest_twelvedata_time_series(
     *, config_path: Path, source_name: str, data_dir: Path, db_path: Path
 ) -> None:
     """Fetch Twelve Data time series and store it locally."""
-    
-    # Check for API key - try environment variable first, then Keychain
+
     api_key = os.environ.get("TWELVEDATA_API_KEY")
     if not api_key:
         api_key = get_secret("TWELVEDATA_API_KEY")
     if not api_key:
         api_key = _get_api_key_from_keychain()
-    
+
     if not api_key:
         raise SystemExit(
             "ERROR: TWELVEDATA_API_KEY not found.\n\n"
@@ -193,78 +245,114 @@ def ingest_twelvedata_time_series(
             "  2. macOS Keychain: service='TWELVEDATA_API_KEY'\n\n"
             "Get your free API key at https://twelvedata.com/"
         )
-    
+
     sources = load_sources(config_path)
     if source_name not in sources:
         raise SystemExit(f"Unknown source '{source_name}'. Available: {', '.join(sorted(sources.keys()))}")
-    
+
     source = sources[source_name]
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "raw" / source.name).mkdir(parents=True, exist_ok=True)
     (data_dir / "state").mkdir(parents=True, exist_ok=True)
-    
+
     state_file = _state_path(data_dir, source.name)
     state = _load_state(state_file)
-    
+
     started_at = datetime.now(timezone.utc)
     run_id = str(uuid.uuid4())
-    
-    # Extract config
-    symbols = source.extra.get("symbols", [])
+
+    symbols = _dedupe(source.extra.get("symbols", [])) if source.extra else []
     if not symbols:
         raise SystemExit(f"Source '{source_name}' has no 'symbols' configured in sources.toml")
-    
-    interval = source.extra.get("interval", "1day")
-    outputsize = source.extra.get("outputsize", 30)
-    
+
+    interval = source.extra.get("interval", "1day") if source.extra else "1day"
+    outputsize = source.extra.get("outputsize", 30) if source.extra else 30
+
+    quarterly_symbols = _dedupe(source.extra.get("quarterly_symbols", [])) if source.extra else []
+    quarter_interval = source.extra.get("quarter_interval", "1month") if source.extra else "1month"
+    quarter_outputsize = source.extra.get("quarter_outputsize", outputsize) if source.extra else outputsize
+
+    fetch_plan: List[Tuple[str, str, str, int]] = []
+    for sym in symbols:
+        fetch_plan.append((PRIMARY_GROUP, sym, interval, outputsize))
+    for sym in quarterly_symbols:
+        fetch_plan.append((QUARTERLY_GROUP, sym, quarter_interval, quarter_outputsize))
+
+    if not fetch_plan:
+        raise SystemExit(f"Source '{source_name}' has no symbols to fetch")
+
     try:
-        # Fetch data for each symbol
-        all_responses = {}
-        all_normalized = []
-        
-        for symbol in symbols:
+        all_responses: Dict[str, Dict[str, Any]] = {}
+        grouped_symbols: Dict[str, List[str]] = {}
+        all_normalized: List[Dict[str, Any]] = []
+
+        for group, symbol, requested_interval, plan_outputsize in fetch_plan:
             try:
-                fr = fetch_with_retry(
-                    lambda s=symbol: fetch_time_series(
-                        s, api_key=api_key, interval=interval, outputsize=outputsize
-                    )
+                fr, interval_used = _fetch_with_optional_fallback(
+                    api_key=api_key,
+                    symbol=symbol,
+                    requested_interval=requested_interval,
+                    outputsize=plan_outputsize,
+                    series_group=group,
                 )
-                all_responses[symbol] = fr.data
-            except Exception as e:
-                print(f"[{source.name}] Warning: Failed to fetch {symbol}: {e}")
+            except Exception as exc:
+                print(f"[{source.name}] Warning: Failed to fetch {symbol} ({group}): {exc}")
                 continue
-        
-        if not all_responses:
+
+            grouped_symbols.setdefault(group, []).append(symbol)
+            all_responses.setdefault(group, {})[symbol] = {
+                "requested_interval": requested_interval,
+                "used_interval": interval_used,
+                "response": fr.data,
+            }
+
+            temp_ingested_at = datetime.now(timezone.utc)
+            normalized = _normalize_time_series(
+                source,
+                symbol,
+                interval_used,
+                fr.data,
+                temp_ingested_at,
+                raw_path="(pending)",
+                series_group=group,
+            )
+            all_normalized.extend(normalized)
+
+        if not all_normalized:
             raise ValueError("No symbols fetched successfully")
-        
+
         init_db(db_path)
-        
-        # Write combined raw snapshot
+
         ingested_at = datetime.now(timezone.utc)
         raw_path = _raw_path(data_dir, source.name, ingested_at)
         raw_path.parent.mkdir(parents=True, exist_ok=True)
-        raw_path.write_text(
-            json.dumps(all_responses, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-        
-        # Normalize all symbols
-        for symbol, response in all_responses.items():
-            normalized = _normalize_time_series(
-                source, symbol, interval, response, ingested_at, str(raw_path)
-            )
-            all_normalized.extend(normalized)
-        
-        # Upsert to database
+        raw_blob = {
+            "generated_at": ingested_at.isoformat(),
+            "groups": all_responses,
+        }
+        raw_path.write_text(json.dumps(raw_blob, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        # Update normalized rows with final raw path reference
+        for row in all_normalized:
+            row["ingested_at"] = ingested_at
+            row["raw_path"] = str(raw_path)
+
         n_new = upsert_twelvedata_time_series(db_path, all_normalized)
-        
-        # Update state
-        state.update({
-            "last_success_at": ingested_at.isoformat(),
-            "last_raw_path": str(raw_path),
-            "symbols_fetched": list(all_responses.keys()),
-        })
+
+        state.update(
+            {
+                "last_success_at": ingested_at.isoformat(),
+                "last_raw_path": str(raw_path),
+                "symbols_fetched": grouped_symbols.get(PRIMARY_GROUP, []),
+                "quarterly_symbols_fetched": grouped_symbols.get(QUARTERLY_GROUP, []),
+            }
+        )
         _save_state(state_file, state)
-        
+
+        group_summary = []
+        for group, symbols_fetched in grouped_symbols.items():
+            group_summary.append(f"{group}:{len(symbols_fetched)}")
+
         log_run(
             db_path,
             run_id=run_id,
@@ -275,11 +363,13 @@ def ingest_twelvedata_time_series(
             status="ok",
             n_total=len(all_normalized),
             n_new=n_new,
-            message=f"symbols={','.join(all_responses.keys())} raw={raw_path.name}",
+            message=f"groups={'/'.join(group_summary)} raw={raw_path.name}",
         )
-        
-        print(f"[{source.name}] fetched={len(all_normalized)} inserted_or_updated={n_new} raw={raw_path}")
-        
+
+        print(
+            f"[{source.name}] fetched={len(all_normalized)} inserted_or_updated={n_new} groups={group_summary} raw={raw_path}"
+        )
+
     except Exception as e:
         try:
             init_db(db_path)

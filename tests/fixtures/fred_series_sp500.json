@@ -1,0 +1,28 @@
+{
+  "realtime_start": "2024-04-01",
+  "realtime_end": "2024-04-30",
+  "observation_start": "2023-01-01",
+  "observation_end": "2024-04-01",
+  "units": "Index 2018=100",
+  "output_type": 1,
+  "file_type": "json",
+  "order_by": "observation_date",
+  "sort_order": "desc",
+  "count": 2,
+  "offset": 0,
+  "limit": 2,
+  "observations": [
+    {
+      "realtime_start": "2024-04-30",
+      "realtime_end": "2024-04-30",
+      "date": "2024-04-01",
+      "value": "5541.23"
+    },
+    {
+      "realtime_start": "2024-04-30",
+      "realtime_end": "2024-04-30",
+      "date": "2024-03-01",
+      "value": "."
+    }
+  ]
+}

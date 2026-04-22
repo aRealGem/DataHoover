@@ -30,6 +30,13 @@ hoover snapshot --format zip
 hoover snapshot --format parquet
 ```
 
+## Financial data connectors
+
+- **FRED series** (`hoover ingest-fred --source fred_macro_watchlist`) pulls multiple macro and FX time series in one run. Configure API keys via `.env` (`FRED_API_KEY`). Each series writes its own raw JSON (`data/raw/<source>/series_<id>_<timestamp>.json`) before being normalized into DuckDB.
+- **Twelve Data watchlist** (`hoover ingest-twelvedata --source twelvedata_watchlist_daily`) now covers equity ETFs, metals, crypto pairs, and common FX crosses. Sources can opt into `quarterly_symbols` to request a second interval (default `1month`). Twelve Data does not currently serve a real `3month` interval for most tickers, so we automatically fall back to `1week` and log a warning whenever the requested interval is unsupported.
+
+Run `python scripts/list_sources.py` to print a Markdown table of every configured source (name, kind, description) if you need a quick inventory.
+
 ## Testing (no network)
 
 ```bash

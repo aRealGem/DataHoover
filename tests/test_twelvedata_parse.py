@@ -37,6 +37,7 @@ def test_twelvedata_normalization_schema_and_rows():
         "source",
         "symbol",
         "interval",
+        "series_group",
         "ts",
         "open",
         "high",
@@ -177,3 +178,57 @@ outputsize = 5
         assert count > 0, "Expected data to be inserted"
     finally:
         con.close()
+
+def test_twelvedata_quarterly_config_and_fallback(monkeypatch, tmp_path):
+    from datahoover.connectors import twelvedata_time_series as module
+
+    payload = _load_fixture("spy")
+    calls: list[tuple[str, str]] = []
+
+    def fake_fetch_time_series(symbol: str, *, api_key: str, interval: str, outputsize: int, timeout_s: float = 30.0):
+        calls.append((symbol, interval))
+        if interval == "3month":
+            raise ValueError("interval not supported")
+        return module.FetchResult(status_code=200, symbol=symbol, data=payload, raw_bytes=b"{}")
+
+    monkeypatch.setattr(module, "fetch_time_series", fake_fetch_time_series)
+    monkeypatch.setattr(module, "fetch_with_retry", lambda fn: fn())
+    monkeypatch.setenv("TWELVEDATA_API_KEY", "test-key")
+
+    config = tmp_path / "sources.toml"
+    config.write_text(
+        """[[sources]]\nname = \"test_twelvedata\"\nkind = \"twelvedata_time_series\"\ndescription = \"test\"\nsymbols = [\"SPY\"]\ninterval = \"1day\"\noutputsize = 5\nquarterly_symbols = [\"SPY\"]\nquarter_interval = \"3month\"\n""",
+        encoding="utf-8",
+    )
+
+    data_dir = tmp_path / "data"
+    db_path = tmp_path / "warehouse.duckdb"
+
+    module.ingest_twelvedata_time_series(
+        config_path=config,
+        source_name="test_twelvedata",
+        data_dir=data_dir,
+        db_path=db_path,
+    )
+
+    assert calls == [
+        ("SPY", "1day"),
+        ("SPY", "3month"),
+        ("SPY", "1week"),
+    ]
+
+    con = duckdb.connect(str(db_path))
+    try:
+        results = con.execute(
+            "SELECT series_group, interval, COUNT(*) FROM twelvedata_time_series GROUP BY 1, 2"
+        ).fetchall()
+    finally:
+        con.close()
+
+    assert set(results) == {
+        ("primary", "1day", len(payload["values"])),
+        ("quarterly", "1week", len(payload["values"])),
+    }
+
+    raw_files = sorted((data_dir / "raw" / "test_twelvedata").glob("*.json"))
+    assert raw_files, "Expected combined raw snapshot"

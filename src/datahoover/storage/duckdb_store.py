@@ -299,6 +299,7 @@ def init_db(db_path: Path) -> None:
               source       VARCHAR,
               symbol       VARCHAR,
               interval     VARCHAR,
+              series_group VARCHAR,
               ts           TIMESTAMP,
               open         DOUBLE,
               high         DOUBLE,
@@ -312,6 +313,27 @@ def init_db(db_path: Path) -> None:
             );
             """
         )
+        con.execute(
+            "ALTER TABLE twelvedata_time_series ADD COLUMN IF NOT EXISTS series_group VARCHAR DEFAULT 'primary';"
+        )
+        con.execute(
+            "UPDATE twelvedata_time_series SET series_group = 'primary' WHERE series_group IS NULL;"
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fred_series_observations (
+              source           VARCHAR,
+              series_id        VARCHAR,
+              observation_date DATE,
+              value            DOUBLE,
+              realtime_start   DATE,
+              realtime_end     DATE,
+              units            VARCHAR,
+              ingested_at      TIMESTAMP,
+              raw_path         VARCHAR
+            );
+            """
+        )
         # Create indexes for performance
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_signal_id ON signals(signal_id);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_severity ON signals(severity_score DESC, computed_at DESC);")
@@ -320,8 +342,9 @@ def init_db(db_path: Path) -> None:
         con.execute("CREATE INDEX IF NOT EXISTS idx_ooni_measurements_key ON ooni_measurements(source, measurement_id);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_caida_ioda_events_key ON caida_ioda_events(source, event_id);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_ingest_runs_lookup ON ingest_runs(source, status, ended_at);")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_twelvedata_time_series_key ON twelvedata_time_series(source, symbol, interval, ts);")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_twelvedata_time_series_key ON twelvedata_time_series(source, symbol, interval, series_group, ts);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_twelvedata_time_series_query ON twelvedata_time_series(source, symbol, ts DESC);")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_fred_series_key ON fred_series_observations(source, series_id, observation_date, realtime_start, realtime_end);")
     finally:
         con.close()
 
@@ -884,6 +907,53 @@ def upsert_signals(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
         con.close()
     return inserted
 
+def upsert_fred_series_observations(db_path: Path, rows: list[dict]) -> int:
+    """Upsert FRED series observations keyed by source, series, date, and realtime window."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                """
+                DELETE FROM fred_series_observations
+                WHERE source = ? AND series_id = ?
+                  AND observation_date IS NOT DISTINCT FROM ?
+                  AND realtime_start IS NOT DISTINCT FROM ?
+                  AND realtime_end IS NOT DISTINCT FROM ?
+                """
+                ,
+                [
+                    r["source"],
+                    r["series_id"],
+                    r.get("observation_date"),
+                    r.get("realtime_start"),
+                    r.get("realtime_end"),
+                ],
+            )
+            con.execute(
+                """
+                INSERT INTO fred_series_observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                ,
+                [
+                    r["source"],
+                    r["series_id"],
+                    r.get("observation_date"),
+                    r.get("value"),
+                    r.get("realtime_start"),
+                    r.get("realtime_end"),
+                    r.get("units"),
+                    r.get("ingested_at"),
+                    r.get("raw_path"),
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+
 
 def log_run(
     db_path: Path,
@@ -938,7 +1008,7 @@ def show_latest(*, db_path: Path, limit: int = 10) -> None:
 
 
 def upsert_twelvedata_time_series(db_path: Path, rows: list[dict]) -> int:
-    """Upsert Twelve Data time series records (idempotent on source+symbol+interval+ts)."""
+    """Upsert Twelve Data time series records (idempotent on source+symbol+interval+series_group+ts)."""
     con = duckdb.connect(str(db_path))
     inserted = 0
     try:
@@ -946,20 +1016,23 @@ def upsert_twelvedata_time_series(db_path: Path, rows: list[dict]) -> int:
             existing = con.execute(
                 """
                 SELECT COUNT(*) FROM twelvedata_time_series
-                WHERE source = ? AND symbol = ? AND interval = ? AND ts = ?
-                """,
-                [r["source"], r["symbol"], r["interval"], r["ts"]],
+                WHERE source = ? AND symbol = ? AND interval = ? AND series_group = ? AND ts = ?
+                """
+                ,
+                [r["source"], r["symbol"], r["interval"], r.get("series_group"), r["ts"]],
             ).fetchone()
             if existing and existing[0] > 0:
                 continue
             con.execute(
                 """
-                INSERT INTO twelvedata_time_series VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+                INSERT INTO twelvedata_time_series VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                ,
                 [
                     r["source"],
                     r["symbol"],
                     r["interval"],
+                    r.get("series_group"),
                     r["ts"],
                     r["open"],
                     r["high"],

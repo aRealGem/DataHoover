@@ -29,3 +29,4 @@ only/
 # Local scratch/exports
 if/
 data-hoover.zip
+.env
