@@ -321,6 +321,9 @@ def _ooni_signals(
     *,
     cutoff: datetime,
     computed_at: datetime,
+    min_total: int = 10,
+    min_current_ratio: float = 0.5,
+    min_ratio_delta: float = 0.3,
 ) -> List[Dict[str, Any]]:
     window_hours = (computed_at - cutoff).total_seconds() / 3600.0
     prior_start = cutoff - timedelta(hours=window_hours)
@@ -373,7 +376,7 @@ def _ooni_signals(
         prior_ratio = 0.0
         if prior and prior[2]:
             prior_ratio = (prior[1] or 0) / float(prior[2])
-        if total < 10 or current_ratio < 0.5 or (current_ratio - prior_ratio) < 0.3:
+        if total < min_total or current_ratio < min_current_ratio or (current_ratio - prior_ratio) < min_ratio_delta:
             continue
         summary = f"OONI anomaly spike in {probe_cc}"
         details = {
@@ -519,6 +522,8 @@ def _market_move_signals(
     *,
     cutoff: datetime,
     computed_at: datetime,
+    min_abs_return: float = 0.02,
+    severity_denominator: float = 0.10,
 ) -> List[Dict[str, Any]]:
     """Compute market move signals from Twelve Data + FRED; dedupe only same-instrument Coinbase crypto pairs."""
     td_rows = con.execute(
@@ -580,9 +585,9 @@ def _market_move_signals(
                 continue
             daily_return = (close_recent - close_prev) / close_prev
             abs_return = abs(daily_return)
-            if abs_return < 0.02:
+            if abs_return < min_abs_return:
                 continue
-            severity = min(1.0, abs_return / 0.10)
+            severity = min(1.0, abs_return / severity_denominator)
             direction = "gain" if daily_return > 0 else "loss"
             summary = f"{entity_id} {abs(daily_return)*100:.2f}% {direction}"
             details = {
@@ -639,18 +644,25 @@ ProducerFn = Callable[..., List[Dict[str, Any]]]
 
 # Module-level registry: ordered list of (name, adapter) where each adapter has the
 # uniform signature `(con, *, cutoff, computed_at, **config) -> list[SignalRow]`.
-# New producers append here in commit order.
+# Adapters pull their thresholds from `config["thresholds"][<signal_type>]`, falling
+# back to the producer's kwarg defaults if a key is missing.
 PRODUCERS: List[tuple[str, ProducerFn]] = [
     (
         "earthquake",
         lambda con, *, cutoff, computed_at, **cfg: _earthquake_signals(
-            con, cutoff=cutoff, min_magnitude=cfg["min_magnitude"], computed_at=computed_at
+            con,
+            cutoff=cutoff,
+            min_magnitude=cfg["thresholds"].get("earthquake", {}).get("min_magnitude", cfg["min_magnitude"]),
+            computed_at=computed_at,
         ),
     ),
     (
         "gdacs",
         lambda con, *, cutoff, computed_at, **cfg: _gdacs_signals(
-            con, cutoff=cutoff, min_severity=cfg["gdacs_min_severity"], computed_at=computed_at
+            con,
+            cutoff=cutoff,
+            min_severity=cfg["thresholds"].get("gdacs", {}).get("min_severity", cfg["gdacs_min_severity"]),
+            computed_at=computed_at,
         ),
     ),
     (
@@ -662,7 +674,7 @@ PRODUCERS: List[tuple[str, ProducerFn]] = [
     (
         "ooni",
         lambda con, *, cutoff, computed_at, **cfg: _ooni_signals(
-            con, cutoff=cutoff, computed_at=computed_at
+            con, cutoff=cutoff, computed_at=computed_at, **cfg["thresholds"].get("ooni", {})
         ),
     ),
     (
@@ -674,10 +686,13 @@ PRODUCERS: List[tuple[str, ProducerFn]] = [
     (
         "market_move",
         lambda con, *, cutoff, computed_at, **cfg: _market_move_signals(
-            con, cutoff=cutoff, computed_at=computed_at
+            con, cutoff=cutoff, computed_at=computed_at, **cfg["thresholds"].get("market_move", {})
         ),
     ),
 ]
+
+
+DEFAULT_SOURCES_PATH = Path("sources.toml")
 
 
 def compute_signals(
@@ -687,17 +702,25 @@ def compute_signals(
     min_magnitude: float = 5.0,
     gdacs_min_severity: float = 0.6,
     computed_at: datetime | None = None,
+    config_path: Path | None = None,
 ) -> int:
+    from .sources import load_signal_thresholds
+
     computed_at = computed_at or datetime.now(timezone.utc)
     cutoff = computed_at - parse_since(since)
     db_path_obj = Path(db_path)
     init_db(db_path_obj)
+    resolved_config_path = config_path if config_path is not None else (
+        DEFAULT_SOURCES_PATH if DEFAULT_SOURCES_PATH.exists() else None
+    )
+    thresholds = load_signal_thresholds(resolved_config_path)
     con = duckdb.connect(str(db_path_obj))
     try:
         config: Dict[str, Any] = {
             "min_magnitude": min_magnitude,
             "gdacs_min_severity": gdacs_min_severity,
             "db_path": db_path_obj,
+            "thresholds": thresholds,
         }
         signals: List[Dict[str, Any]] = []
         for _name, producer in PRODUCERS:
