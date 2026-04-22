@@ -15,7 +15,8 @@ from ._retry import fetch_with_retry
 
 FRED_BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
 USER_AGENT = "data-hoover/0.1 (+local-first; contact: you@example.com)"
-DEFAULT_FREQUENCY = "daily"
+# Do not send `frequency=` — many series (e.g. SP500, DJIA, FX, Coinbase crypto) are
+# native-frequency only; FRED returns HTTP 400 if frequency is overridden.
 DEFAULT_LIMIT = 120
 HTTP_TIMEOUT_S = 30.0
 
@@ -35,7 +36,6 @@ def fetch_fred_series_observations(
     *,
     series_id: str,
     api_key: str,
-    frequency: str = DEFAULT_FREQUENCY,
     limit: int = DEFAULT_LIMIT,
     timeout_s: float = HTTP_TIMEOUT_S,
 ) -> Dict[str, Any]:
@@ -43,7 +43,6 @@ def fetch_fred_series_observations(
         "series_id": series_id,
         "api_key": api_key,
         "file_type": "json",
-        "frequency": frequency,
         "sort_order": "desc",
         "limit": str(limit),
     }
@@ -131,7 +130,6 @@ def ingest_fred_series(
             f"Source '{source_name}' must define 'series_ids' in sources.toml for the FRED connector"
         )
 
-    frequency = str(extra.get("frequency") or DEFAULT_FREQUENCY)
     limit = int(extra.get("limit") or DEFAULT_LIMIT)
 
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -153,7 +151,6 @@ def ingest_fred_series(
                     lambda s=sid: fetch_fred_series_observations(
                         series_id=s,
                         api_key=api_key,
-                        frequency=frequency,
                         limit=limit,
                     )
                 )
