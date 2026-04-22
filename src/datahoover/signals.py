@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import duckdb
 
@@ -635,6 +635,51 @@ def _market_move_signals(
     return signals
 
 
+ProducerFn = Callable[..., List[Dict[str, Any]]]
+
+# Module-level registry: ordered list of (name, adapter) where each adapter has the
+# uniform signature `(con, *, cutoff, computed_at, **config) -> list[SignalRow]`.
+# New producers append here in commit order.
+PRODUCERS: List[tuple[str, ProducerFn]] = [
+    (
+        "earthquake",
+        lambda con, *, cutoff, computed_at, **cfg: _earthquake_signals(
+            con, cutoff=cutoff, min_magnitude=cfg["min_magnitude"], computed_at=computed_at
+        ),
+    ),
+    (
+        "gdacs",
+        lambda con, *, cutoff, computed_at, **cfg: _gdacs_signals(
+            con, cutoff=cutoff, min_severity=cfg["gdacs_min_severity"], computed_at=computed_at
+        ),
+    ),
+    (
+        "ioda",
+        lambda con, *, cutoff, computed_at, **cfg: _ioda_signals(
+            con, cutoff=cutoff, computed_at=computed_at
+        ),
+    ),
+    (
+        "ooni",
+        lambda con, *, cutoff, computed_at, **cfg: _ooni_signals(
+            con, cutoff=cutoff, computed_at=computed_at
+        ),
+    ),
+    (
+        "worldbank",
+        lambda con, *, cutoff, computed_at, **cfg: _worldbank_signals(
+            con, cutoff=cutoff, computed_at=computed_at, db_path=cfg["db_path"]
+        ),
+    ),
+    (
+        "market_move",
+        lambda con, *, cutoff, computed_at, **cfg: _market_move_signals(
+            con, cutoff=cutoff, computed_at=computed_at
+        ),
+    ),
+]
+
+
 def compute_signals(
     *,
     db_path: str,
@@ -649,15 +694,14 @@ def compute_signals(
     init_db(db_path_obj)
     con = duckdb.connect(str(db_path_obj))
     try:
+        config: Dict[str, Any] = {
+            "min_magnitude": min_magnitude,
+            "gdacs_min_severity": gdacs_min_severity,
+            "db_path": db_path_obj,
+        }
         signals: List[Dict[str, Any]] = []
-        signals.extend(
-            _earthquake_signals(con, cutoff=cutoff, min_magnitude=min_magnitude, computed_at=computed_at)
-        )
-        signals.extend(_gdacs_signals(con, cutoff=cutoff, min_severity=gdacs_min_severity, computed_at=computed_at))
-        signals.extend(_ioda_signals(con, cutoff=cutoff, computed_at=computed_at))
-        signals.extend(_ooni_signals(con, cutoff=cutoff, computed_at=computed_at))
-        signals.extend(_worldbank_signals(con, cutoff=cutoff, computed_at=computed_at, db_path=db_path_obj))
-        signals.extend(_market_move_signals(con, cutoff=cutoff, computed_at=computed_at))
+        for _name, producer in PRODUCERS:
+            signals.extend(producer(con, cutoff=cutoff, computed_at=computed_at, **config))
         return upsert_signals(db_path_obj, signals)
     finally:
         con.close()

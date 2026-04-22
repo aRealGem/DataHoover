@@ -46,6 +46,10 @@ Each pipeline is: one or more raw sources → one producer function → rows in 
 - `fred_macro_watchlist` — FRED indexes / gold / USD FX crosses; each series emits its own signal (distinct from TD tickers; SP500 ≠ SPY, DEXUSEU ≠ EUR/USD).
 - `fred_crypto_fx` — FRED Coinbase BTC/ETH/XMR. When both TD and FRED produce a candidate for the same crypto on the same UTC calendar day, **Twelve Data wins** and the FRED twin is dropped (canonical `entity_id` uses the TD form, e.g. `BTC/USD`). Requires `FRED_API_KEY`.
 
+## Producer registry
+
+`compute_signals` iterates `signals.PRODUCERS`, a module-level ordered list of `(name, adapter)` pairs. Each adapter has the uniform signature `(con, *, cutoff, computed_at, **config) -> list[SignalRow]` and delegates to the underlying producer function. New producers append to this list in commit order.
+
 ## Signals table
 
 All producers write into DuckDB table **`signals`**: 13 columns (`signal_id`, `signal_type`, `source`, `entity_type`, `entity_id`, `ts_start`, `ts_end`, `severity_score`, `summary`, `details_json`, `ingested_at`, `computed_at`, `raw_paths`).
