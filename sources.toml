@@ -115,6 +115,17 @@ description = "BLS CPS/CES/CPI-U starter series for TruthBot lookup (unemploymen
 series_ids = ["LNS14000000", "CUUR0000SA0", "CES0000000001", "LNS11300000"]
 purpose = "raw_only"
 
+[[sources]]
+name = "census_acs_state_basic"
+kind = "census_acs"
+url = "https://api.census.gov/data"
+description = "ACS 5-year: population, median household income, poverty universe counts (per state)."
+dataset = "acs5"
+years = [2022]
+variables = ["B01003_001E", "B19013_001E", "B17001_001E", "B17001_002E"]
+geo_for = "state:*"
+purpose = "raw_only"
+
 # --------------------------------------------------------------------------- #
 # Signal producer thresholds. Keys not present here fall back to the defaults
 # in `SIGNAL_THRESHOLD_DEFAULTS` in `src/datahoover/sources.py`.

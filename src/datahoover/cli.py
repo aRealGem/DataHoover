@@ -22,6 +22,7 @@ from .connectors.ripe_atlas_probes import ingest_ripe_atlas_probes
 from .connectors.twelvedata_time_series import ingest_twelvedata_time_series
 from .connectors.fred_series import ingest_fred_series
 from .connectors.bls_timeseries import ingest_bls_timeseries
+from .connectors.census_acs import ingest_census_acs
 from .storage.duckdb_store import show_latest
 from .signals import compute_signals, alert_signals
 from .snapshot import snapshot_zip, snapshot_parquet, default_snapshot_stamp
@@ -143,6 +144,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_bls.add_argument("--source", type=str, default="bls_truthbot_watchlist", help="Source name from sources.toml")
     p_bls.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
     p_bls.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+
+    p_census = sub.add_parser("ingest-census", help="Ingest U.S. Census ACS API observations into DuckDB")
+    p_census.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
+    p_census.add_argument("--source", type=str, default="census_acs_state_basic", help="Source name from sources.toml")
+    p_census.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
+    p_census.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
 
     p_signals = sub.add_parser("compute-signals", help="Compute derived signals from ingested data")
     p_signals.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
@@ -328,6 +335,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "ingest-bls":
         ingest_bls_timeseries(
+            config_path=args.config,
+            source_name=args.source,
+            data_dir=args.data_dir,
+            db_path=args.db,
+        )
+        return 0
+
+    if args.cmd == "ingest-census":
+        ingest_census_acs(
             config_path=args.config,
             source_name=args.source,
             data_dir=args.data_dir,

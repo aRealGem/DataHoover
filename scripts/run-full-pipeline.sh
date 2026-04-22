@@ -84,6 +84,7 @@ run_ingest "ingest-twelvedata" ingest-twelvedata --source twelvedata_watchlist_d
 run_ingest "ingest-fred-macro" ingest-fred --source fred_macro_watchlist
 run_ingest "ingest-fred-crypto" ingest-fred --source fred_crypto_fx
 run_ingest "ingest-bls" ingest-bls --source bls_truthbot_watchlist
+run_ingest "ingest-census" ingest-census --source census_acs_state_basic
 
 echo "--- compute-signals ---"
 set +e

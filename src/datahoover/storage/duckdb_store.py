@@ -349,6 +349,22 @@ def init_db(db_path: Path) -> None:
             );
             """
         )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS census_observations (
+              source       VARCHAR,
+              dataset      VARCHAR,
+              year         INTEGER,
+              geo_type     VARCHAR,
+              geo_id       VARCHAR,
+              variable     VARCHAR,
+              value        DOUBLE,
+              label        VARCHAR,
+              ingested_at  TIMESTAMP,
+              raw_path     VARCHAR
+            );
+            """
+        )
         # Create indexes for performance
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_signal_id ON signals(signal_id);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_severity ON signals(severity_score DESC, computed_at DESC);")
@@ -362,6 +378,9 @@ def init_db(db_path: Path) -> None:
         con.execute("CREATE INDEX IF NOT EXISTS idx_fred_series_key ON fred_series_observations(source, series_id, observation_date, realtime_start, realtime_end);")
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_bls_timeseries_key ON bls_timeseries_observations(source, series_id, year, period);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_census_obs_key ON census_observations(source, dataset, year, geo_type, geo_id, variable);"
         )
     finally:
         con.close()
@@ -996,6 +1015,50 @@ def upsert_bls_timeseries_observations(db_path: Path, rows: list[dict]) -> int:
                     r.get("period_name"),
                     r.get("value"),
                     r.get("footnotes"),
+                    r.get("ingested_at"),
+                    r.get("raw_path"),
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_census_observations(db_path: Path, rows: list[dict]) -> int:
+    """Upsert Census ACS rows keyed by source, dataset, year, geo, and variable."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                """
+                DELETE FROM census_observations
+                WHERE source = ? AND dataset = ? AND year = ?
+                  AND geo_type = ? AND geo_id = ? AND variable = ?
+                """,
+                [
+                    r["source"],
+                    r["dataset"],
+                    r["year"],
+                    r["geo_type"],
+                    r["geo_id"],
+                    r["variable"],
+                ],
+            )
+            con.execute(
+                """
+                INSERT INTO census_observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["dataset"],
+                    r["year"],
+                    r["geo_type"],
+                    r["geo_id"],
+                    r["variable"],
+                    r.get("value"),
+                    r.get("label"),
                     r.get("ingested_at"),
                     r.get("raw_path"),
                 ],
