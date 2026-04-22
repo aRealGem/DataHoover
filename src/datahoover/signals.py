@@ -457,103 +457,149 @@ def _worldbank_signals(
     return signals
 
 
+# FRED↔TD synonym map: only collapse where FRED is literally the same instrument at lower cadence.
+# Keys are the canonical entity_id (TD form); values are the list of raw series_id aliases from FRED.
+_MARKET_MOVE_CRYPTO_SYNONYMS: Dict[str, List[str]] = {
+    "BTC/USD": ["CBBTCUSD"],
+    "ETH/USD": ["CBETHUSD"],
+    "XMR/USD": ["CBXMRUSD"],
+}
+# Reverse lookup: FRED series_id -> canonical TD entity_id
+_FRED_TO_CANONICAL: Dict[str, str] = {
+    fred_id: canonical
+    for canonical, aliases in _MARKET_MOVE_CRYPTO_SYNONYMS.items()
+    for fred_id in aliases
+}
+# Source priority for tie-break when both feeds produce a candidate on the same calendar day.
+# Twelve Data is higher-cadence for Coinbase crypto pairs, so it wins.
+_MARKET_MOVE_SOURCE_PRIORITY = {"twelvedata_time_series": 1, "fred_series": 0}
+
+
+def _canonical_market_symbol(raw_symbol: str, feed: str) -> str:
+    """Map a feed-specific symbol to the canonical entity_id; non-crypto symbols pass through."""
+    if feed == "fred_series":
+        return _FRED_TO_CANONICAL.get(raw_symbol, raw_symbol)
+    return raw_symbol
+
+
 def _market_move_signals(
     con: duckdb.DuckDBPyConnection,
     *,
     cutoff: datetime,
     computed_at: datetime,
 ) -> List[Dict[str, Any]]:
-    """Compute market move signals based on daily returns."""
-    # Get time series data ordered by symbol and timestamp
-    rows = con.execute(
+    """Compute market move signals from Twelve Data + FRED; dedupe only same-instrument Coinbase crypto pairs."""
+    td_rows = con.execute(
         """
-        SELECT source, symbol, ts, close, raw_path, ingested_at
+        SELECT source, symbol, ts, close, raw_path, ingested_at, 'twelvedata_time_series' AS feed
         FROM twelvedata_time_series
         WHERE ts >= ?
-        ORDER BY symbol, ts DESC
         """,
         [cutoff],
     ).fetchall()
-    
+
+    fred_rows: List[tuple] = []
+    fred_table_exists = con.execute(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'fred_series_observations'"
+    ).fetchone()[0]
+    if fred_table_exists:
+        fred_rows = con.execute(
+            """
+            SELECT source,
+                   series_id AS symbol,
+                   CAST(observation_date AS TIMESTAMP) AS ts,
+                   value AS close,
+                   COALESCE(raw_path, '') AS raw_path,
+                   ingested_at,
+                   'fred_series' AS feed
+            FROM fred_series_observations
+            WHERE observation_date >= CAST(? AS DATE)
+              AND value IS NOT NULL
+            """,
+            [cutoff],
+        ).fetchall()
+
+    rows = list(td_rows) + list(fred_rows)
     if not rows:
         return []
-    
+
     signals: List[Dict[str, Any]] = []
-    
-    # Collect distinct sources and fetch raw paths for each
     sources = {row[0] for row in rows}
     raw_paths_map = {src: _raw_paths_for_source(con, src, cutoff) for src in sources}
-    
-    # Group by symbol and compute returns
-    symbol_data: Dict[str, List[tuple]] = {}
-    for source, symbol, ts, close, raw_path, ingested_at in rows:
-        if symbol not in symbol_data:
-            symbol_data[symbol] = []
-        symbol_data[symbol].append((source, ts, close, raw_path, ingested_at))
-    
-    for symbol, data_points in symbol_data.items():
-        # Sort by timestamp descending (most recent first)
-        data_points.sort(key=lambda x: x[1], reverse=True)
-        
-        if len(data_points) < 2:
+
+    grouped: Dict[str, List[tuple]] = {}
+    for source, symbol, ts, close, raw_path, ingested_at, feed in rows:
+        entity_id = _canonical_market_symbol(symbol, feed)
+        grouped.setdefault(entity_id, []).append((source, ts, close, raw_path, ingested_at, feed))
+
+    for entity_id, data_points in grouped.items():
+        per_feed: Dict[str, Dict[str, Any]] = {}
+        for feed in {dp[5] for dp in data_points}:
+            feed_points = sorted(
+                (dp for dp in data_points if dp[5] == feed),
+                key=lambda x: x[1],
+                reverse=True,
+            )
+            if len(feed_points) < 2:
+                continue
+            source_recent, ts_recent, close_recent, raw_path_recent, ingested_at, _ = feed_points[0]
+            _, ts_prev, close_prev, _, _, _ = feed_points[1]
+            if close_prev is None or close_prev == 0 or close_recent is None:
+                continue
+            daily_return = (close_recent - close_prev) / close_prev
+            abs_return = abs(daily_return)
+            if abs_return < 0.02:
+                continue
+            severity = min(1.0, abs_return / 0.10)
+            direction = "gain" if daily_return > 0 else "loss"
+            summary = f"{entity_id} {abs(daily_return)*100:.2f}% {direction}"
+            details = {
+                "symbol": entity_id,
+                "feed": feed,
+                "ts_recent": str(ts_recent),
+                "ts_prev": str(ts_prev),
+                "close_recent": close_recent,
+                "close_prev": close_prev,
+                "daily_return": daily_return,
+                "direction": direction,
+            }
+            payload = {
+                "signal_type": "market_move",
+                "source": source_recent,
+                "entity_type": "symbol",
+                "entity_id": entity_id,
+                "ts_start": str(ts_recent),
+                "summary": summary,
+            }
+            per_feed[feed] = {
+                "signal_id": _signal_id(payload),
+                "signal_type": "market_move",
+                "source": source_recent,
+                "entity_type": "symbol",
+                "entity_id": entity_id,
+                "ts_start": ts_recent,
+                "ts_end": ts_recent,
+                "severity_score": severity,
+                "summary": summary,
+                "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False),
+                "ingested_at": ingested_at,
+                "computed_at": computed_at,
+                "raw_paths": json.dumps(raw_paths_map.get(source_recent, [])),
+                "_ts_recent_date": ts_recent.date() if hasattr(ts_recent, "date") else ts_recent,
+            }
+        if not per_feed:
             continue
-        
-        # Get most recent two data points
-        source_recent, ts_recent, close_recent, raw_path_recent, ingested_at = data_points[0]
-        source_prev, ts_prev, close_prev, _, _ = data_points[1]
-        
-        if close_prev is None or close_prev == 0 or close_recent is None:
-            continue
-        
-        # Calculate daily return
-        daily_return = (close_recent - close_prev) / close_prev
-        abs_return = abs(daily_return)
-        
-        # Scale severity: 5% move = 0.5, 10% move = 1.0
-        severity = min(1.0, abs_return / 0.10)
-        
-        # Only create signal for significant moves (>2%)
-        if abs_return < 0.02:
-            continue
-        
-        direction = "gain" if daily_return > 0 else "loss"
-        summary = f"{symbol} {abs(daily_return)*100:.2f}% {direction}"
-        
-        details = {
-            "symbol": symbol,
-            "ts_recent": str(ts_recent),
-            "ts_prev": str(ts_prev),
-            "close_recent": close_recent,
-            "close_prev": close_prev,
-            "daily_return": daily_return,
-            "direction": direction,
-        }
-        
-        payload = {
-            "signal_type": "market_move",
-            "source": source_recent,
-            "entity_type": "symbol",
-            "entity_id": symbol,
-            "ts_start": str(ts_recent),
-            "summary": summary,
-        }
-        
-        signals.append({
-            "signal_id": _signal_id(payload),
-            "signal_type": "market_move",
-            "source": source_recent,
-            "entity_type": "symbol",
-            "entity_id": symbol,
-            "ts_start": ts_recent,
-            "ts_end": ts_recent,
-            "severity_score": severity,
-            "summary": summary,
-            "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False),
-            "ingested_at": ingested_at,
-            "computed_at": computed_at,
-            "raw_paths": json.dumps(raw_paths_map.get(source_recent, [])),
-        })
-    
+        if entity_id in _MARKET_MOVE_CRYPTO_SYNONYMS and len(per_feed) >= 2:
+            feeds_same_day = len({row["_ts_recent_date"] for row in per_feed.values()}) == 1
+            if feeds_same_day:
+                winning_feed = max(per_feed, key=lambda f: _MARKET_MOVE_SOURCE_PRIORITY.get(f, 0))
+                for row in [per_feed[winning_feed]]:
+                    row.pop("_ts_recent_date", None)
+                    signals.append(row)
+                continue
+        for row in per_feed.values():
+            row.pop("_ts_recent_date", None)
+            signals.append(row)
     return signals
 
 

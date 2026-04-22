@@ -42,6 +42,8 @@ Each pipeline is: one or more raw sources → one producer function → rows in 
 *Daily return from last two bars per symbol; signal if `|return| ≥ 2%`; severity `min(1, |return| / 10%)`.*
 
 - `twelvedata_watchlist_daily` — Twelve Data daily bars (ETFs, metals, crypto, FX; requires `TWELVEDATA_API_KEY`).
+- `fred_macro_watchlist` — FRED indexes / gold / USD FX crosses; each series emits its own signal (distinct from TD tickers; SP500 ≠ SPY, DEXUSEU ≠ EUR/USD).
+- `fred_crypto_fx` — FRED Coinbase BTC/ETH/XMR. When both TD and FRED produce a candidate for the same crypto on the same UTC calendar day, **Twelve Data wins** and the FRED twin is dropped (canonical `entity_id` uses the TD form, e.g. `BTC/USD`). Requires `FRED_API_KEY`.
 
 ## Signals table
 
@@ -63,9 +65,9 @@ These have connectors and tables in [`duckdb_store.py`](../src/datahoover/storag
 | Category | Source names (`sources.toml`) |
 |----------|--------------------------------|
 | Weather & US disasters | `openfema_disaster_declarations`, `nws_alerts_active` |
-| Macro & markets (extra / unsignaled) | `eurostat_gdp`, `worldbank_gdp_usa`, `fred_macro_watchlist`, `fred_crypto_fx` |
+| Macro & markets (extra / unsignaled) | `eurostat_gdp`, `worldbank_gdp_usa` |
 | Catalog / discovery | `datagov_catalog_climate`, `hdx_catalog_cholera`, `socrata_example`, `opendatasoft_example` |
 | News | `gdelt_democracy_24h` |
 | Network measurement | `ripe_ris_live_10s`, `ripe_atlas_probes` |
 
-That is **13** dark sources vs **7** source rows that feed the six pipelines above (20 total `[[sources]]` blocks in `sources.toml`).
+That is **11** dark sources vs **9** source rows that feed the six pipelines above (20 total `[[sources]]` blocks in `sources.toml`).
