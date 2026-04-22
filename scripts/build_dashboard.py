@@ -396,7 +396,7 @@ def _fetch_fred_daily(con: duckdb.DuckDBPyConnection, series_id: str, cutoff: da
         WHERE series_id = ? AND observation_date >= CAST(? AS DATE) AND value IS NOT NULL
         ORDER BY observation_date
         """,
-        [series_id, cutoff.date()],
+        [series_id, cutoff.astimezone(timezone.utc).date()],
     ).fetchall()
     return [{"d": r[0].isoformat() if hasattr(r[0], "isoformat") else str(r[0]), "close": float(r[1])} for r in rows]
 
