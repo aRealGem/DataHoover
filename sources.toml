@@ -22,7 +22,6 @@ name = "openfema_disaster_declarations"
 kind = "openfema_disaster_declarations"
 url = "https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?$top=1000&$select=femaDeclarationString,disasterNumber,state,declarationType,declarationDate,incidentType,declarationTitle,incidentBeginDate,incidentEndDate"
 description = "OpenFEMA disaster declarations (summary fields)."
-purpose = "raw_only"
 
 [[sources]]
 name = "nws_alerts_active"

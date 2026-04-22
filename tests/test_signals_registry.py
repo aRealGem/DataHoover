@@ -20,6 +20,7 @@ def test_registry_names_and_order_match_docs():
         "worldbank",
         "market_move",
         "weather_alert",
+        "disaster_declaration",
     ]
 
 
@@ -53,6 +54,7 @@ def test_compute_signals_invokes_every_registered_producer(monkeypatch, tmp_path
         ("worldbank", fake("worldbank")),
         ("market_move", fake("market_move")),
         ("weather_alert", fake("weather_alert")),
+        ("disaster_declaration", fake("disaster_declaration")),
     ]
     monkeypatch.setattr(signals_module, "PRODUCERS", spy_registry)
 
@@ -72,4 +74,5 @@ def test_compute_signals_invokes_every_registered_producer(monkeypatch, tmp_path
         "worldbank",
         "market_move",
         "weather_alert",
+        "disaster_declaration",
     ]

@@ -58,6 +58,12 @@ Each pipeline is: one or more raw sources → one producer function → rows in 
 
 - `nws_alerts_active` — National Weather Service active alerts (weather.gov).
 
+### 8. Disaster declarations → `_disaster_declaration_signals` (`signal_type`: `disaster_declaration`)
+
+*Fires on every row with `declaration_date >= cutoff`. Severity prior is taken from `declaration_type`: `DR` (Major Disaster) = 0.8, `EM` (Emergency) = 0.5, `FM` (Fire Management) = 0.3; anything else falls back to 0.4. `entity_type = "fema_declaration"`, `entity_id = femaDeclarationString` (stored as `declaration_id`).*
+
+- `openfema_disaster_declarations` — OpenFEMA disaster declarations summary.
+
 ## Producer registry
 
 `compute_signals` iterates `signals.PRODUCERS`, a module-level ordered list of `(name, adapter)` pairs. Each adapter has the uniform signature `(con, *, cutoff, computed_at, **config) -> list[SignalRow]` and delegates to the underlying producer function. New producers append to this list in commit order.
@@ -98,10 +104,9 @@ These have connectors and tables in [`duckdb_store.py`](../src/datahoover/storag
 
 | Category | Source names (`sources.toml`) |
 |----------|--------------------------------|
-| Weather & US disasters | `openfema_disaster_declarations` |
 | Macro & markets (extra / unsignaled) | `eurostat_gdp`, `worldbank_gdp_usa` |
 | Catalog / discovery | `datagov_catalog_climate`, `hdx_catalog_cholera`, `socrata_example`, `opendatasoft_example` |
 | News | `gdelt_democracy_24h` |
 | Network measurement | `ripe_atlas_probes` |
 
-That is **8** dark sources vs **11** source rows that feed the seven pipelines above (`ripe_ris_live_10s` enriches IODA but is not an independent signal). The file has 20 total `[[sources]]` blocks.
+That is **7** dark sources vs **12** source rows that feed the eight pipelines above (`ripe_ris_live_10s` enriches IODA but is not an independent signal). The file has 20 total `[[sources]]` blocks.

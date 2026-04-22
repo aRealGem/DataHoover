@@ -761,6 +761,86 @@ def _weather_alert_signals(
     return signals
 
 
+# FEMA declaration-type priors. Anything else (e.g. 'DRFM') falls through to 0.4.
+_FEMA_DECLARATION_PRIORS = {"DR": 0.8, "EM": 0.5, "FM": 0.3}
+
+
+def _disaster_declaration_signals(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    cutoff: datetime,
+    computed_at: datetime,
+) -> List[Dict[str, Any]]:
+    """OpenFEMA declarations -> disaster_declaration signals with type-based severity priors."""
+    if not con.execute(
+        "SELECT COUNT(*) FROM information_schema.tables "
+        "WHERE table_name = 'openfema_disaster_declarations'"
+    ).fetchone()[0]:
+        return []
+    rows = con.execute(
+        """
+        SELECT source, declaration_id, disaster_number, state, declaration_type,
+               declaration_date, incident_type, declaration_title,
+               incident_begin_date, incident_end_date, ingested_at
+        FROM openfema_disaster_declarations
+        WHERE declaration_date >= ?
+        """,
+        [cutoff],
+    ).fetchall()
+    signals: List[Dict[str, Any]] = []
+    sources = {row[0] for row in rows}
+    raw_paths_map = {src: _raw_paths_for_source(con, src, cutoff) for src in sources}
+    for (
+        source,
+        declaration_id,
+        disaster_number,
+        state,
+        declaration_type,
+        declaration_date,
+        incident_type,
+        declaration_title,
+        incident_begin_date,
+        incident_end_date,
+        ingested_at,
+    ) in rows:
+        score = _FEMA_DECLARATION_PRIORS.get((declaration_type or "").upper(), 0.4)
+        summary = f"FEMA {declaration_type or '?'} {declaration_id} ({incident_type or 'disaster'})"
+        details = {
+            "declaration_id": declaration_id,
+            "disaster_number": disaster_number,
+            "state": state,
+            "declaration_type": declaration_type,
+            "incident_type": incident_type,
+            "declaration_title": declaration_title,
+        }
+        payload = {
+            "signal_type": "disaster_declaration",
+            "source": source,
+            "entity_type": "fema_declaration",
+            "entity_id": declaration_id,
+            "ts_start": str(declaration_date),
+            "summary": summary,
+        }
+        signals.append(
+            {
+                "signal_id": _signal_id(payload),
+                "signal_type": "disaster_declaration",
+                "source": source,
+                "entity_type": "fema_declaration",
+                "entity_id": declaration_id,
+                "ts_start": declaration_date,
+                "ts_end": incident_end_date,
+                "severity_score": score,
+                "summary": summary,
+                "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False),
+                "ingested_at": ingested_at,
+                "computed_at": computed_at,
+                "raw_paths": json.dumps(raw_paths_map.get(source, [])),
+            }
+        )
+    return signals
+
+
 ProducerFn = Callable[..., List[Dict[str, Any]]]
 
 # Mapping of producer name -> source names in sources.toml that feed it.
@@ -778,6 +858,7 @@ PRODUCER_SOURCES: Dict[str, List[str]] = {
         "fred_crypto_fx",
     ],
     "weather_alert": ["nws_alerts_active"],
+    "disaster_declaration": ["openfema_disaster_declarations"],
 }
 
 # Module-level registry: ordered list of (name, adapter) where each adapter has the
@@ -830,6 +911,12 @@ PRODUCERS: List[tuple[str, ProducerFn]] = [
     (
         "weather_alert",
         lambda con, *, cutoff, computed_at, **cfg: _weather_alert_signals(
+            con, cutoff=cutoff, computed_at=computed_at
+        ),
+    ),
+    (
+        "disaster_declaration",
+        lambda con, *, cutoff, computed_at, **cfg: _disaster_declaration_signals(
             con, cutoff=cutoff, computed_at=computed_at
         ),
     ),
