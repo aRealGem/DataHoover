@@ -6,11 +6,7 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 ensure_pkg() {
   local pkg="$1"
-  "$PYTHON_BIN" - <<PY >/dev/null 2>&1
-import importlib.util, sys
-sys.exit(0 if importlib.util.find_spec("$pkg") else 1)
-PY
-  if [ $? -ne 0 ]; then
+  if ! "$PYTHON_BIN" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('$pkg') else 1)" >/dev/null 2>&1; then
     "$PYTHON_BIN" -m pip install "$pkg"
   fi
 }
