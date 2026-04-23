@@ -95,6 +95,67 @@ def test_twelvedata_idempotent_upsert(tmp_path):
     assert count == len(rows), "Expected row count to match original insert"
 
 
+def test_twelvedata_upsert_handles_legacy_column_order(tmp_path):
+    """Regression: on warehouses created before `series_group` existed, the column
+    was appended via ALTER TABLE and lives at the end. The upsert must bind by
+    column name, not position, so the string "primary" never lands in `ts`.
+    """
+    db_path = tmp_path / "warehouse.duckdb"
+
+    con = duckdb.connect(str(db_path))
+    try:
+        con.execute(
+            """
+            CREATE TABLE twelvedata_time_series (
+              source       VARCHAR,
+              symbol       VARCHAR,
+              interval     VARCHAR,
+              ts           TIMESTAMP,
+              open         DOUBLE,
+              high         DOUBLE,
+              low          DOUBLE,
+              close        DOUBLE,
+              volume       BIGINT,
+              currency     VARCHAR,
+              exchange     VARCHAR,
+              ingested_at  TIMESTAMP,
+              raw_path     VARCHAR
+            );
+            """
+        )
+        con.execute(
+            "ALTER TABLE twelvedata_time_series ADD COLUMN series_group VARCHAR DEFAULT 'primary';"
+        )
+    finally:
+        con.close()
+
+    payload = _load_fixture("spy")
+    source = Source(
+        name="twelvedata_watchlist_daily",
+        kind="twelvedata_time_series",
+        url="https://api.twelvedata.com/time_series",
+        extra={"symbols": ["SPY"], "interval": "1day", "outputsize": 30},
+    )
+    rows = _normalize_time_series(
+        source, "SPY", "1day", payload, datetime(2026, 2, 1, tzinfo=timezone.utc),
+        "/path/to/raw.json",
+    )
+
+    n_new = upsert_twelvedata_time_series(db_path, rows)
+    assert n_new == len(rows)
+
+    con = duckdb.connect(str(db_path))
+    try:
+        row = con.execute(
+            "SELECT series_group, ts FROM twelvedata_time_series LIMIT 1"
+        ).fetchone()
+    finally:
+        con.close()
+
+    assert row[0] == "primary"
+    assert isinstance(row[1], datetime)
+
+
 def test_twelvedata_multiple_symbols(tmp_path):
     spy_payload = _load_fixture("spy")
     btc_payload = _load_fixture("btc")

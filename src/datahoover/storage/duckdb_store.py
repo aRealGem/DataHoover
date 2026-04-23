@@ -1139,7 +1139,10 @@ def upsert_twelvedata_time_series(db_path: Path, rows: list[dict]) -> int:
                 continue
             con.execute(
                 """
-                INSERT INTO twelvedata_time_series VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO twelvedata_time_series
+                  (source, symbol, interval, series_group, ts, open, high, low,
+                   close, volume, currency, exchange, ingested_at, raw_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 ,
                 [
