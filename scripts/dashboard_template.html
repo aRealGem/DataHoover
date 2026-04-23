@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>DataHoover — signals dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <style>
+    :root { --bg: #f6f7fb; --fg: #1a1d26; --muted: #5c6578; --card: #fff; --border: #e2e6ef; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #12141a; --fg: #e8eaef; --muted: #9aa3b5; --card: #1c1f28; --border: #2a3142; }
+    }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--fg); }
+    header { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); background: var(--card); }
+    h1 { font-size: 1.15rem; margin: 0 0 0.35rem; }
+    .sub { color: var(--muted); font-size: 0.85rem; }
+    main { padding: 1rem; max-width: 1200px; margin: 0 auto; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+    .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
+    .chip { font-size: 0.72rem; padding: 0.2rem 0.5rem; border-radius: 999px; background: var(--border); color: var(--fg); }
+    #map { height: 420px; border-radius: 8px; }
+    .spark-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.75rem; }
+    .spark-box { min-height: 220px; }
+    h2 { font-size: 0.95rem; margin: 0 0 0.5rem; color: var(--muted); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>DataHoover — signals dashboard</h1>
+    <div class="sub" id="metaLine"></div>
+  </header>
+  <main>
+    <div class="card">
+      <h2>Summary</h2>
+      <div id="summaryChips" class="chips"></div>
+    </div>
+    <div class="card">
+      <h2>Map (toggle layers)</h2>
+      <div id="map"></div>
+    </div>
+    <div class="card">
+      <h2>Timeline (drag range slider)</h2>
+      <div id="timeline"></div>
+    </div>
+    <div class="card">
+      <h2>Severity heatmap (max / UTC day)</h2>
+      <div id="heatmap"></div>
+    </div>
+    <div class="card">
+      <h2>Market sparklines (dots = market_move signal days)</h2>
+      <div class="spark-row">
+        <div id="spark-spy" class="spark-box"></div>
+        <div id="spark-gold" class="spark-box"></div>
+        <div id="spark-btc" class="spark-box"></div>
+      </div>
+    </div>
+  </main>
+  <script id="hoover-data" type="application/json">__HOOVER_DATA__</script>
+  <script>
+(function () {
+  const raw = document.getElementById("hoover-data").textContent;
+  const DATA = JSON.parse(raw);
+
+  const TYPE_LABEL = {
+    earthquake: "Earthquake",
+    alert: "GDACS",
+    internet_outage: "IODA outage",
+    censorship_spike: "OONI spike",
+    fiscal_stress: "Fiscal stress",
+    market_move: "Market move",
+    weather_alert: "NWS weather",
+    disaster_declaration: "FEMA declaration",
+  };
+
+  const PALETTE = {
+    earthquake: "#2ca02c",
+    alert: "#d62728",
+    internet_outage: "#9467bd",
+    censorship_spike: "#ff7f0e",
+    fiscal_stress: "#8c564b",
+    market_move: "#e377c2",
+    weather_alert: "#1f77b4",
+    disaster_declaration: "#17becf",
+  };
+
+  document.getElementById("metaLine").textContent =
+    "Generated " + (DATA.meta.generated_at || "") +
+    " · signal window " + (DATA.meta.signal_days || 7) + "d · " +
+    (DATA.meta.note || "");
+
+  const chips = document.getElementById("summaryChips");
+  const total = (DATA.signals || []).length;
+  const uniq = new Set((DATA.signals || []).map(function (s) { return s.entity_id; })).size;
+  const sc = DATA.summary_counts || {};
+  Object.keys(sc).forEach(function (k) {
+    const span = document.createElement("span");
+    span.className = "chip";
+    span.textContent = (TYPE_LABEL[k] || k) + ": " + sc[k];
+    chips.appendChild(span);
+  });
+  const t2 = document.createElement("span");
+  t2.className = "chip";
+  t2.textContent = "Total signals: " + total;
+  chips.appendChild(t2);
+  const t3 = document.createElement("span");
+  t3.className = "chip";
+  t3.textContent = "Unique entities: " + uniq;
+  chips.appendChild(t3);
+
+  const markersAll = DATA.map_markers || [];
+  let rangeStart = null;
+  let rangeEnd = null;
+
+  function inRange(tsIso) {
+    if (!rangeStart || !rangeEnd) return true;
+    const t = Date.parse(tsIso);
+    return t >= rangeStart.getTime() && t <= rangeEnd.getTime();
+  }
+
+  const map = L.map("map", { worldCopyJump: true }).setView([20, 0], 2);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap",
+  }).addTo(map);
+
+  const layerGroups = {};
+  const overlayMaps = {};
+  (DATA.heatmap.types || []).forEach(function (t) {
+    layerGroups[t] = L.layerGroup();
+    overlayMaps[TYPE_LABEL[t] || t] = layerGroups[t];
+  });
+
+  Object.keys(layerGroups).forEach(function (t) { layerGroups[t].addTo(map); });
+  L.control.layers(null, overlayMaps, { collapsed: false }).addTo(map);
+
+  function markerColor(t) { return PALETTE[t] || "#7f7f7f"; }
+
+  function redrawMap() {
+    Object.keys(layerGroups).forEach(function (t) { layerGroups[t].clearLayers(); });
+    markersAll.forEach(function (m) {
+      if (!inRange(m.ts)) return;
+      const g = layerGroups[m.signal_type];
+      if (!g) return;
+      const r = 4 + Math.min(14, 10 * (m.severity || 0));
+      const c = markerColor(m.signal_type);
+      const mk = L.circleMarker([m.lat, m.lon], { radius: r, color: c, fillColor: c, fillOpacity: 0.65, weight: 1 });
+      mk.bindPopup("<b>" + (TYPE_LABEL[m.signal_type] || m.signal_type) + "</b><br/>" +
+        (m.entity_id || "") + "<br/>sev " + (m.severity != null ? m.severity.toFixed(3) : "?") +
+        "<br/><small>" + (m.summary || "").replace(/</g, "&lt;") + "</small>");
+      mk.addTo(g);
+    });
+  }
+  redrawMap();
+
+  const sigs = DATA.signals || [];
+  const types = Array.from(new Set(sigs.map(function (s) { return s.signal_type; })));
+  const tracesT = types.map(function (t) {
+    const sub = sigs.filter(function (s) { return s.signal_type === t; });
+    return {
+      type: "scatter",
+      mode: "markers",
+      name: TYPE_LABEL[t] || t,
+      x: sub.map(function (s) { return s.ts_start; }),
+      y: sub.map(function (s) { return s.severity_score; }),
+      marker: { size: 9, color: markerColor(t) },
+    };
+  });
+
+  const timelineEl = document.getElementById("timeline");
+  const heatmapEl = document.getElementById("heatmap");
+  Plotly.newPlot(timelineEl, tracesT, {
+    xaxis: { title: "ts_start", rangeslider: { visible: true }, type: "date" },
+    yaxis: { title: "severity", range: [0, 1.05] },
+    height: 420,
+    margin: { t: 28, r: 12, b: 72, l: 48 },
+    paper_bgcolor: "transparent",
+    plot_bgcolor: "transparent",
+    legend: { orientation: "h", y: 1.12 },
+  }, { responsive: true, displaylogo: false });
+
+  const hm = DATA.heatmap || { types: [], days: [], z: [] };
+  const zText = (hm.z || []).map(function (row) {
+    return row.map(function (v) { return v == null ? "" : v.toFixed(2); });
+  });
+  Plotly.newPlot(heatmapEl, [{
+    type: "heatmap",
+    x: hm.days || [],
+    y: (hm.types || []).map(function (t) { return TYPE_LABEL[t] || t; }),
+    z: hm.z || [],
+    text: zText,
+    hoverongaps: false,
+    colorscale: "Viridis",
+    zmin: 0,
+    zmax: 1,
+  }], {
+    height: 320,
+    margin: { t: 8, r: 12, b: 48, l: 140 },
+    paper_bgcolor: "transparent",
+    plot_bgcolor: "transparent",
+  }, { responsive: true, displaylogo: false });
+
+  function yForDate(points, d) {
+    const p = (points || []).find(function (pt) { return pt.d === d; });
+    return p && p.close != null ? p.close : null;
+  }
+
+  function sparkPlot(divId, title, block) {
+    const pts = (block && block.points) || [];
+    const sigDates = (block && block.signal_dates) || [];
+    const xs = pts.map(function (p) { return p.d; });
+    const ys = pts.map(function (p) { return p.close; });
+    const sx = [];
+    const sy = [];
+    sigDates.forEach(function (d) {
+      const y = yForDate(pts, d);
+      if (y != null) { sx.push(d); sy.push(y); }
+    });
+    const traces = [
+      { type: "scatter", mode: "lines", name: "close", x: xs, y: ys, line: { width: 1.5 } },
+      { type: "scatter", mode: "markers", name: "signal", x: sx, y: sy, marker: { size: 10, color: "#d62728" } },
+    ];
+    Plotly.newPlot(divId, traces, {
+      title: { text: title + " (" + ((block && block.source) || "?") + ")", font: { size: 13 } },
+      height: 220,
+      margin: { t: 36, r: 8, b: 36, l: 44 },
+      xaxis: { type: "date" },
+      paper_bgcolor: "transparent",
+      plot_bgcolor: "transparent",
+      showlegend: false,
+    }, { responsive: true, displaylogo: false });
+  }
+
+  const M = DATA.market || {};
+  sparkPlot("spark-spy", "SPY", M.spy);
+  sparkPlot("spark-gold", "Gold", M.gold);
+  sparkPlot("spark-btc", "BTC/USD", M.btc);
+
+  timelineEl.on("plotly_relayout", function (ev) {
+    const a0 = ev["xaxis.range[0]"];
+    const a1 = ev["xaxis.range[1]"];
+    if (a0 && a1) {
+      rangeStart = new Date(a0);
+      rangeEnd = new Date(a1);
+      redrawMap();
+      const maskZ = (hm.z || []).map(function (row) {
+        return row.map(function (v, j) {
+          const day = (hm.days || [])[j];
+          if (!day) return null;
+          const ds = Date.parse(day + "T12:00:00Z");
+          if (ds < rangeStart.getTime() || ds > rangeEnd.getTime()) return null;
+          return v;
+        });
+      });
+      const maskText = maskZ.map(function (row) {
+        return row.map(function (v) { return v == null ? "" : v.toFixed(2); });
+      });
+      Plotly.restyle(heatmapEl, { z: [maskZ], text: [maskText] });
+    } else if (ev["xaxis.autorange"] === true) {
+      rangeStart = rangeEnd = null;
+      redrawMap();
+      Plotly.restyle(heatmapEl, { z: [hm.z || []], text: [zText] });
+    }
+  });
+})();
+  </script>
+</body>
+</html>

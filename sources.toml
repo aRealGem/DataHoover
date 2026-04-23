@@ -84,7 +84,7 @@ purpose = "raw_only"
 name = "twelvedata_watchlist_daily"
 kind = "twelvedata_time_series"
 description = "Twelve Data watchlist for equity ETFs, metals, crypto, and FX pairs (requires TWELVEDATA_API_KEY)."
-symbols = ["SPY", "QQQ", "DIA", "IWM", "GLD", "BTC/USD", "XMR/USD", "ETH/USD", "EUR/USD", "GBP/USD", "JPY/USD", "CHF/USD", "AUD/USD", "CAD/USD"]
+symbols = ["SPY", "QQQ", "DIA", "IWM", "GLD", "XAU/USD", "BTC/USD", "XMR/USD", "ETH/USD", "EUR/USD", "GBP/USD", "JPY/USD", "CHF/USD", "AUD/USD", "CAD/USD"]
 quarterly_symbols = ["SPY", "QQQ", "DIA", "IWM", "GLD"]
 quarter_interval = "1month"
 interval = "1day"
@@ -95,9 +95,8 @@ outputsize = 30
 name = "fred_macro_watchlist"
 kind = "fred_series"
 url = "https://api.stlouisfed.org/fred/series/observations"
-description = "FRED macro + FX watchlist (SP500, DJIA, NASDAQ, gold, USD cross rates)."
-series_ids = ["SP500", "DJIA", "NASDAQCOM", "GOLDAMGBD228NLBM", "DEXUSEU", "DEXUSUK", "DEXUSAL", "DEXJPUS"]
-frequency = "daily"
+description = "FRED macro + FX watchlist (SP500, DJIA, NASDAQ, USD cross rates). Spot gold is sourced from Twelve Data (`XAU/USD`); the former FRED `GOLDAMGBD228NLBM` feed is discontinued and returns HTTP 400."
+series_ids = ["SP500", "DJIA", "NASDAQCOM", "DEXUSEU", "DEXUSUK", "DEXUSAL", "DEXJPUS"]
 limit = 180
 
 [[sources]]
@@ -106,8 +105,26 @@ kind = "fred_series"
 url = "https://api.stlouisfed.org/fred/series/observations"
 description = "FRED Coinbase crypto reference rates (BTC, ETH, experimental XMR)."
 series_ids = ["CBBTCUSD", "CBETHUSD", "CBXMRUSD"]
-frequency = "daily"
 limit = 120
+
+[[sources]]
+name = "bls_truthbot_watchlist"
+kind = "bls_timeseries"
+url = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
+description = "BLS CPS/CES/CPI-U starter series for TruthBot lookup (unemployment, CPI-U, NFP, LFPR)."
+series_ids = ["LNS14000000", "CUUR0000SA0", "CES0000000001", "LNS11300000"]
+purpose = "raw_only"
+
+[[sources]]
+name = "census_acs_state_basic"
+kind = "census_acs"
+url = "https://api.census.gov/data"
+description = "ACS 5-year: population, median household income, poverty universe counts (per state)."
+dataset = "acs5"
+years = [2022]
+variables = ["B01003_001E", "B19013_001E", "B17001_001E", "B17001_002E"]
+geo_for = "state:*"
+purpose = "raw_only"
 
 # --------------------------------------------------------------------------- #
 # Signal producer thresholds. Keys not present here fall back to the defaults

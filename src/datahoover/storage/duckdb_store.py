@@ -334,6 +334,37 @@ def init_db(db_path: Path) -> None:
             );
             """
         )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bls_timeseries_observations (
+              source       VARCHAR,
+              series_id    VARCHAR,
+              year         INTEGER,
+              period       VARCHAR,
+              period_name  VARCHAR,
+              value        DOUBLE,
+              footnotes    VARCHAR,
+              ingested_at  TIMESTAMP,
+              raw_path     VARCHAR
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS census_observations (
+              source       VARCHAR,
+              dataset      VARCHAR,
+              year         INTEGER,
+              geo_type     VARCHAR,
+              geo_id       VARCHAR,
+              variable     VARCHAR,
+              value        DOUBLE,
+              label        VARCHAR,
+              ingested_at  TIMESTAMP,
+              raw_path     VARCHAR
+            );
+            """
+        )
         # Create indexes for performance
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_signal_id ON signals(signal_id);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_severity ON signals(severity_score DESC, computed_at DESC);")
@@ -345,6 +376,12 @@ def init_db(db_path: Path) -> None:
         con.execute("CREATE INDEX IF NOT EXISTS idx_twelvedata_time_series_key ON twelvedata_time_series(source, symbol, interval, series_group, ts);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_twelvedata_time_series_query ON twelvedata_time_series(source, symbol, ts DESC);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_fred_series_key ON fred_series_observations(source, series_id, observation_date, realtime_start, realtime_end);")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_bls_timeseries_key ON bls_timeseries_observations(source, series_id, year, period);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_census_obs_key ON census_observations(source, dataset, year, geo_type, geo_id, variable);"
+        )
     finally:
         con.close()
 
@@ -953,6 +990,83 @@ def upsert_fred_series_observations(db_path: Path, rows: list[dict]) -> int:
     return inserted
 
 
+def upsert_bls_timeseries_observations(db_path: Path, rows: list[dict]) -> int:
+    """Upsert BLS timeseries rows keyed by source, series_id, year, and period."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                """
+                DELETE FROM bls_timeseries_observations
+                WHERE source = ? AND series_id = ? AND year = ? AND period = ?
+                """,
+                [r["source"], r["series_id"], r["year"], r["period"]],
+            )
+            con.execute(
+                """
+                INSERT INTO bls_timeseries_observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["series_id"],
+                    r["year"],
+                    r["period"],
+                    r.get("period_name"),
+                    r.get("value"),
+                    r.get("footnotes"),
+                    r.get("ingested_at"),
+                    r.get("raw_path"),
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_census_observations(db_path: Path, rows: list[dict]) -> int:
+    """Upsert Census ACS rows keyed by source, dataset, year, geo, and variable."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                """
+                DELETE FROM census_observations
+                WHERE source = ? AND dataset = ? AND year = ?
+                  AND geo_type = ? AND geo_id = ? AND variable = ?
+                """,
+                [
+                    r["source"],
+                    r["dataset"],
+                    r["year"],
+                    r["geo_type"],
+                    r["geo_id"],
+                    r["variable"],
+                ],
+            )
+            con.execute(
+                """
+                INSERT INTO census_observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["dataset"],
+                    r["year"],
+                    r["geo_type"],
+                    r["geo_id"],
+                    r["variable"],
+                    r.get("value"),
+                    r.get("label"),
+                    r.get("ingested_at"),
+                    r.get("raw_path"),
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
 
 
 def log_run(
@@ -1025,7 +1139,10 @@ def upsert_twelvedata_time_series(db_path: Path, rows: list[dict]) -> int:
                 continue
             con.execute(
                 """
-                INSERT INTO twelvedata_time_series VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO twelvedata_time_series
+                  (source, symbol, interval, series_group, ts, open, high, low,
+                   close, volume, currency, exchange, ingested_at, raw_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 ,
                 [

@@ -18,6 +18,41 @@ def fred_payload() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def test_fetch_fred_series_observations_omits_frequency_param(monkeypatch):
+    """Regression: FRED returns 400 for native-only series when frequency= is sent."""
+    captured: dict = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"observations": []}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def get(self, url, params=None, headers=None):
+            captured["url"] = url
+            captured["params"] = dict(params or {})
+            return FakeResponse()
+
+    monkeypatch.setattr(fred.httpx, "Client", FakeClient)
+
+    fred.fetch_fred_series_observations(series_id="SP500", api_key="k", limit=5)
+
+    assert "frequency" not in captured["params"]
+    assert captured["params"]["series_id"] == "SP500"
+    assert captured["params"]["limit"] == "5"
+
+
 def test_fred_normalization_handles_missing_values(fred_payload):
     source = Source(
         name="fred_macro_watchlist",

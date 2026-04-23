@@ -96,7 +96,15 @@ All producers write into DuckDB table **`signals`**: 13 columns (`signal_id`, `s
 - `hoover alert` — prints matching signals to stdout (grouped by type).
 - `hoover snapshot` — zips `raw/`, `state/`, and the DuckDB file, or writes one Parquet file per table under a stamped directory (see `--format` / `--output` in the CLI).
 - Example Parquet path after `hoover snapshot --format parquet`: `data/snapshots/snapshot-<stamp>/signals.parquet`.
-- **No** in-repo web dashboards, maps, or notebooks for signals today.
+- **Static dashboard (local):** after ingesting into `data/warehouse.duckdb`, run `python scripts/build_dashboard.py` to emit `data/dashboard/index.html` (gitignored). The page embeds signals + map/timeline/sparkline context; open the file in a browser. Use `./scripts/run-full-pipeline.sh` for a best-effort full ingest + `compute-signals --since 7d` first.
+
+## Lookup layer for external consumers
+
+Downstream apps (e.g. **TruthBot**) that need **primary-source facts**—a value, provenance, and as-of semantics—can use the read-only Python module **`datahoover.lookup`** on top of the same DuckDB warehouse populated by `hoover ingest-*`. This path is intentionally separate from **signals** (which answer “was there a notable change?”).
+
+- **Module:** [`src/datahoover/lookup.py`](../src/datahoover/lookup.py) — `get_observation`, `get_series`, frozen `Observation` with `as_json_dict()`.
+- **Qualified IDs** such as `BLS:LNS14000000`, `FRED:UNRATE`, and `CENSUS:B19013_001E@state:06` disambiguate sources; see **[docs/lookup.md](lookup.md)** for the full table, date rules, and stability guarantees.
+- **Starter `raw_only` sources** in `sources.toml`: `bls_truthbot_watchlist`, `census_acs_state_basic` — ingested for lookup/review; they do not register a signal producer (contract: `purpose = "raw_only"` in [`tests/test_sources_contract.py`](../tests/test_sources_contract.py)).
 
 ## Dark sources — ingested, no signal producer wired
 
