@@ -146,7 +146,10 @@ def test_fetch_census_retries_without_key_when_key_returns_non_json(monkeypatch,
     assert captured[0].get("key") == "bad-key"
     assert "key" not in captured[1]
     assert out[1][0] == "CA"
-    assert "retrying without key" in capsys.readouterr().out
+    err = capsys.readouterr().err
+    assert "CENSUS API KEY FAILURE" in err
+    assert "FAILOVER ENGAGED" in err
+    assert "retrying WITHOUT `key=`" in err
 
 
 def test_ingest_census_roundtrip(monkeypatch, tmp_path, census_grid):

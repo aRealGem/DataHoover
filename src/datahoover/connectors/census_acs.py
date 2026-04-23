@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,6 +59,25 @@ def _census_get_array_payload(
     return payload
 
 
+def _warn_census_key_failover(*, reason: str, year: int, dataset: str) -> None:
+    """Emit a highly visible stderr banner when CENSUS_API_KEY is rejected and
+    the connector is about to fall back to an unauthenticated request.
+    """
+    banner = "!" * 72
+    message = (
+        f"\n{banner}\n"
+        f"!!! CENSUS API KEY FAILURE -- FAILOVER ENGAGED !!!\n"
+        f"!!! endpoint : https://api.census.gov/data/{year}/acs/{dataset}\n"
+        f"!!! reason   : {reason}\n"
+        f"!!! action   : retrying WITHOUT `key=` (anonymous, rate-limited)\n"
+        f"!!! fix      : verify CENSUS_API_KEY in .env / env vars\n"
+        f"!!! signup   : https://api.census.gov/data/key_signup.html\n"
+        f"{banner}\n"
+    )
+    sys.stderr.write(message)
+    sys.stderr.flush()
+
+
 def fetch_census_acs_json(
     *,
     year: int,
@@ -69,8 +89,9 @@ def fetch_census_acs_json(
 ) -> list[Any]:
     """GET ACS JSON array-of-arrays (header row + data rows).
 
-    If ``CENSUS_API_KEY`` is set but rejected (302/empty body/HTML), retry once without ``key=``
-    so small anonymous queries still succeed.
+    If ``CENSUS_API_KEY`` is set but rejected (302/empty body/HTML), emit a loud
+    stderr banner and retry once without ``key=`` so small anonymous queries
+    still succeed. The failover is visible; silent success on a bad key is not.
     """
     get_cols = ["NAME"] + list(variables)
     params_base: Dict[str, Any] = {
@@ -85,11 +106,8 @@ def fetch_census_acs_json(
                 params={**params_base, "key": api_key},
                 timeout_s=timeout_s,
             )
-        except (ValueError, json.JSONDecodeError):
-            print(
-                "[census_acs] Warning: request with CENSUS_API_KEY did not return a JSON array; "
-                "retrying without key (check key at https://api.census.gov/data/key_signup.html)."
-            )
+        except (ValueError, json.JSONDecodeError) as exc:
+            _warn_census_key_failover(reason=str(exc), year=year, dataset=dataset)
     return _census_get_array_payload(url=url, params=params_base, timeout_s=timeout_s)
 
 
