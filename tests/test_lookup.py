@@ -145,6 +145,50 @@ def test_worldbank_dispatch(lookup_db):
     assert obs.geo == "USA"
 
 
+def test_twelvedata_gold_dispatch(tmp_path):
+    db_path = tmp_path / "td.duckdb"
+    init_db(db_path)
+    con = duckdb.connect(str(db_path))
+    try:
+        con.execute(
+            """
+            INSERT INTO twelvedata_time_series
+              (source, symbol, interval, series_group, ts, open, high, low,
+               close, volume, currency, exchange, ingested_at, raw_path)
+            VALUES
+              ('twelvedata_watchlist_daily', 'XAU/USD', '1day', 'primary',
+               TIMESTAMP '2026-04-20 00:00:00', 2400.0, 2415.0, 2395.0, 2410.5,
+               0, 'USD', 'Physical', TIMESTAMP '2026-04-22 00:00:00', 'raw/td1.json'),
+              ('twelvedata_watchlist_daily', 'XAU/USD', '1day', 'primary',
+               TIMESTAMP '2026-04-21 00:00:00', 2410.0, 2420.0, 2400.0, 2418.25,
+               0, 'USD', 'Physical', TIMESTAMP '2026-04-22 00:00:00', 'raw/td2.json')
+            """
+        )
+    finally:
+        con.close()
+
+    latest = get_observation("TWELVEDATA:XAU/USD", db_path=db_path)
+    assert latest is not None
+    assert latest.source == "TWELVEDATA"
+    assert latest.series_id == "XAU/USD"
+    assert latest.value == pytest.approx(2418.25)
+    assert latest.as_of == date(2026, 4, 21)
+    assert latest.units == "USD"
+
+    earlier = get_observation("TWELVEDATA:XAU/USD", date="2026-04-20", db_path=db_path)
+    assert earlier is not None
+    assert earlier.value == pytest.approx(2410.5)
+
+    rows = get_series(
+        "TWELVEDATA:XAU/USD",
+        start="2026-04-20",
+        end="2026-04-20",
+        db_path=db_path,
+    )
+    assert len(rows) == 1
+    assert rows[0].as_of == date(2026, 4, 20)
+
+
 def test_eurostat_dispatch(lookup_db):
     obs = get_observation("EUROSTAT:B1GQ@EU27_2020", date="2020-01-01", db_path=lookup_db)
     assert obs is not None

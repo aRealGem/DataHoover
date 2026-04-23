@@ -84,7 +84,7 @@ purpose = "raw_only"
 name = "twelvedata_watchlist_daily"
 kind = "twelvedata_time_series"
 description = "Twelve Data watchlist for equity ETFs, metals, crypto, and FX pairs (requires TWELVEDATA_API_KEY)."
-symbols = ["SPY", "QQQ", "DIA", "IWM", "GLD", "BTC/USD", "XMR/USD", "ETH/USD", "EUR/USD", "GBP/USD", "JPY/USD", "CHF/USD", "AUD/USD", "CAD/USD"]
+symbols = ["SPY", "QQQ", "DIA", "IWM", "GLD", "XAU/USD", "BTC/USD", "XMR/USD", "ETH/USD", "EUR/USD", "GBP/USD", "JPY/USD", "CHF/USD", "AUD/USD", "CAD/USD"]
 quarterly_symbols = ["SPY", "QQQ", "DIA", "IWM", "GLD"]
 quarter_interval = "1month"
 interval = "1day"
@@ -95,8 +95,8 @@ outputsize = 30
 name = "fred_macro_watchlist"
 kind = "fred_series"
 url = "https://api.stlouisfed.org/fred/series/observations"
-description = "FRED macro + FX watchlist (SP500, DJIA, NASDAQ, gold, USD cross rates)."
-series_ids = ["SP500", "DJIA", "NASDAQCOM", "GOLDAMGBD228NLBM", "DEXUSEU", "DEXUSUK", "DEXUSAL", "DEXJPUS"]
+description = "FRED macro + FX watchlist (SP500, DJIA, NASDAQ, USD cross rates). Spot gold is sourced from Twelve Data (`XAU/USD`); the former FRED `GOLDAMGBD228NLBM` feed is discontinued and returns HTTP 400."
+series_ids = ["SP500", "DJIA", "NASDAQCOM", "DEXUSEU", "DEXUSUK", "DEXUSAL", "DEXJPUS"]
 limit = 180
 
 [[sources]]

@@ -11,7 +11,9 @@ from typing import Any
 
 import duckdb
 
-KNOWN_PREFIXES = frozenset({"BLS", "FRED", "CENSUS", "WORLDBANK", "EUROSTAT"})
+KNOWN_PREFIXES = frozenset(
+    {"BLS", "FRED", "CENSUS", "WORLDBANK", "EUROSTAT", "TWELVEDATA"}
+)
 
 
 @dataclass(frozen=True)
@@ -219,6 +221,8 @@ def get_observation(
             return _lookup_worldbank_observation(con, qualified_id, rest, target)
         if prefix == "EUROSTAT":
             return _lookup_eurostat_observation(con, qualified_id, rest, target)
+        if prefix == "TWELVEDATA":
+            return _lookup_twelvedata_observation(con, qualified_id, rest, target)
     finally:
         con.close()
     raise AssertionError("unreachable")
@@ -249,6 +253,8 @@ def get_series(
             return _lookup_worldbank_series(con, qualified_id, rest, start_d, end_d)
         if prefix == "EUROSTAT":
             return _lookup_eurostat_series(con, qualified_id, rest, start_d, end_d)
+        if prefix == "TWELVEDATA":
+            return _lookup_twelvedata_series(con, qualified_id, rest, start_d, end_d)
     finally:
         con.close()
     raise AssertionError("unreachable")
@@ -670,6 +676,100 @@ def _lookup_eurostat_observation(
         fetched_at=pick["ingested_at"],
         raw_path=None,
     )
+
+
+def _lookup_twelvedata_observation(
+    con: duckdb.DuckDBPyConnection, qid: str, symbol: str, target: date | None
+) -> Observation | None:
+    """Lookup a Twelve Data close price for a symbol (primary series group only).
+
+    NOTE: Twelve Data is a commercial aggregator, not a primary government source.
+    It lives in the same lookup API as a convenience (e.g. spot gold via
+    ``TWELVEDATA:XAU/USD`` since the FRED LBMA series is discontinued).
+    """
+    rows = con.execute(
+        """
+        SELECT ts, close, currency, exchange, ingested_at, raw_path
+        FROM twelvedata_time_series
+        WHERE symbol = ? AND series_group = 'primary'
+        ORDER BY ts ASC
+        """,
+        [symbol],
+    ).fetchall()
+    if not rows:
+        return None
+    mapped = [
+        {
+            "ts": r[0],
+            "close": r[1],
+            "currency": r[2],
+            "exchange": r[3],
+            "ingested_at": r[4],
+            "raw_path": r[5],
+            "as_of": _sql_date_value(r[0]),
+        }
+        for r in rows
+    ]
+    if target is None:
+        pick = mapped[-1]
+    else:
+        on_or_before = [m for m in mapped if m["as_of"] <= target]
+        if not on_or_before:
+            return None
+        exact = [m for m in on_or_before if m["as_of"] == target]
+        pick = exact[-1] if exact else on_or_before[-1]
+    return _row_to_observation(
+        qid,
+        value=pick["close"],
+        as_of=pick["as_of"],
+        source="TWELVEDATA",
+        series_id=symbol,
+        units=pick["currency"],
+        label=pick["exchange"] or None,
+        geo=None,
+        fetched_at=pick["ingested_at"],
+        raw_path=pick["raw_path"],
+    )
+
+
+def _lookup_twelvedata_series(
+    con: duckdb.DuckDBPyConnection,
+    qid: str,
+    symbol: str,
+    start: date | None,
+    end: date | None,
+) -> list[Observation]:
+    rows = con.execute(
+        """
+        SELECT ts, close, currency, exchange, ingested_at, raw_path
+        FROM twelvedata_time_series
+        WHERE symbol = ? AND series_group = 'primary'
+        ORDER BY ts ASC
+        """,
+        [symbol],
+    ).fetchall()
+    out: list[Observation] = []
+    for r in rows:
+        as_of = _sql_date_value(r[0])
+        if start is not None and as_of < start:
+            continue
+        if end is not None and as_of > end:
+            continue
+        out.append(
+            _row_to_observation(
+                qid,
+                value=r[1],
+                as_of=as_of,
+                source="TWELVEDATA",
+                series_id=symbol,
+                units=r[2],
+                label=r[3] or None,
+                geo=None,
+                fetched_at=r[4],
+                raw_path=r[5],
+            )
+        )
+    return out
 
 
 def _lookup_eurostat_series(

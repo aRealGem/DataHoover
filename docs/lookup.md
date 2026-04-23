@@ -20,11 +20,13 @@ Breaking changes to these should only ship with a **minor or major** version bum
 | `CENSUS` | `CENSUS:<variable>@<geo_type>:<geo_id>` | `CENSUS:B19013_001E@state:06` | `census_observations` |
 | `WORLDBANK` | `WORLDBANK:<series_id>@<country_id>` | `WORLDBANK:NY.GDP.MKTP.CD@USA` | `worldbank_indicators` |
 | `EUROSTAT` | `EUROSTAT:<na_item>@<geo>` | `EUROSTAT:B1GQ@EU27_2020` | `eurostat_stats` |
+| `TWELVEDATA` | `TWELVEDATA:<symbol>` | `TWELVEDATA:XAU/USD` | `twelvedata_time_series` (primary series group) |
 
 - **BLS / FRED:** `series_id` is the provider’s native series code.
 - **Census:** `variable` is an ACS table measure (e.g. `B01003_001E`). `geo_type` / `geo_id` follow the Census `for=` clause (e.g. `state:06` for California).
 - **World Bank:** WDI `series_id` and `country_id` (e.g. `USA`).
 - **Eurostat:** `na_item` and `geo` dimension values; `time_period` is chosen by `get_observation` / `get_series` from ingested rows.
+- **Twelve Data:** commercial aggregator (not a primary government source) included for series the primary providers no longer maintain — notably **spot gold as `TWELVEDATA:XAU/USD`** (FRED's `GOLDAMGBD228NLBM` was removed after returning HTTP 400). `value` is the close price; `units` is the quote currency.
 
 Unknown prefixes raise **`LookupError`**. Missing rows return **`None`** (`get_observation`) or an **empty list** (`get_series`).
 
