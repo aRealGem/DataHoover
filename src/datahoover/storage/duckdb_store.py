@@ -365,6 +365,21 @@ def init_db(db_path: Path) -> None:
             );
             """
         )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS eia_v2_observations (
+              source      VARCHAR,
+              route       VARCHAR,
+              frequency   VARCHAR,
+              series_id   VARCHAR,
+              period      VARCHAR,
+              value       DOUBLE,
+              units       VARCHAR,
+              ingested_at TIMESTAMP,
+              raw_path    VARCHAR
+            );
+            """
+        )
         # Create indexes for performance
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_signal_id ON signals(signal_id);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_severity ON signals(severity_score DESC, computed_at DESC);")
@@ -381,6 +396,9 @@ def init_db(db_path: Path) -> None:
         )
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_census_obs_key ON census_observations(source, dataset, year, geo_type, geo_id, variable);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_eia_v2_obs_key ON eia_v2_observations(source, series_id, period);"
         )
     finally:
         con.close()
@@ -979,6 +997,49 @@ def upsert_fred_series_observations(db_path: Path, rows: list[dict]) -> int:
                     r.get("value"),
                     r.get("realtime_start"),
                     r.get("realtime_end"),
+                    r.get("units"),
+                    r.get("ingested_at"),
+                    r.get("raw_path"),
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_eia_v2_observations(db_path: Path, rows: list[dict]) -> int:
+    """Upsert EIA v2 data rows keyed by source, route, frequency, series_id, and period."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                """
+                DELETE FROM eia_v2_observations
+                WHERE source = ? AND route = ? AND frequency = ? AND series_id = ? AND period = ?
+                """
+                ,
+                [
+                    r["source"],
+                    r["route"],
+                    r["frequency"],
+                    r["series_id"],
+                    r["period"],
+                ],
+            )
+            con.execute(
+                """
+                INSERT INTO eia_v2_observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                ,
+                [
+                    r["source"],
+                    r["route"],
+                    r["frequency"],
+                    r["series_id"],
+                    r["period"],
+                    r.get("value"),
                     r.get("units"),
                     r.get("ingested_at"),
                     r.get("raw_path"),

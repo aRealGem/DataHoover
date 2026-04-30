@@ -1,6 +1,161 @@
 # DataHoover architecture
 
+**Repository:** [github.com/aRealGem/DataHoover](https://github.com/aRealGem/DataHoover)
+
 This page describes how configured **sources** in [`sources.toml`](../sources.toml) (auto-merged with [`catalogs.toml`](../catalogs.toml) for catalog endpoints) flow into **signal producers** in [`src/datahoover/signals.py`](../src/datahoover/signals.py), the unified **`signals`** table, and what you can run or export today. It is plain Markdown so it renders the same everywhere (IDE, GitHub, etc.).
+
+## Architecture diagram
+
+End-to-end flow (config → ingest → DuckDB → signals → consumers):
+
+```mermaid
+flowchart TB
+  subgraph cfg [Config]
+    sourcesToml["sources.toml"]
+    catalogsToml["catalogs.toml"]
+    loadSources["load_sources merges sibling catalogs"]
+    sourcesToml --> loadSources
+    catalogsToml --> loadSources
+  end
+
+  subgraph cli [hoover CLI]
+    ingest["ingest-usgs, ingest-fred, ..."]
+    compute["compute-signals"]
+    alertCmd["alert"]
+    snap["snapshot"]
+    showLatest["show-latest"]
+  end
+
+  subgraph net [External]
+    apis["Public HTTP APIs"]
+  end
+
+  subgraph conn [Connectors]
+    mods["src/datahoover/connectors/*"]
+  end
+
+  subgraph local [Local filesystem]
+    raw["data/raw"]
+    state["data/state"]
+    db["data/warehouse.duckdb"]
+  end
+
+  subgraph sig [Signal layer]
+    producers["signals.PRODUCERS"]
+    signalsTbl["DuckDB table: signals"]
+  end
+
+  subgraph down [Downstream consumers]
+    lookup["datahoover.lookup"]
+    dash["scripts/build_dashboard.py"]
+    canvas["scripts/canvas_market_snapshot.py"]
+  end
+
+  loadSources --> ingest
+  ingest --> mods
+  apis --> mods
+  mods --> raw
+  mods --> state
+  mods --> db
+  db --> compute
+  compute --> producers
+  producers --> signalsTbl
+  signalsTbl --> alertCmd
+  db --> snap
+  raw --> snap
+  snap --> export["zip or Parquet export"]
+  db --> lookup
+  db --> dash
+  db --> canvas
+  db --> showLatest
+```
+
+Layers-only variant (slides):
+
+```mermaid
+flowchart LR
+  cfg["TOML config"]
+  cli["hoover CLI"]
+  apis["Public APIs"]
+  conn["Connectors"]
+  raw["data/raw + state"]
+  duck["DuckDB tables"]
+  sig["signals producers"]
+  out["alert / snapshot / lookup / dashboard"]
+
+  cfg --> cli
+  cli --> conn
+  apis --> conn
+  conn --> raw
+  conn --> duck
+  duck --> sig
+  sig --> duck
+  duck --> out
+```
+
+To export as PDF or image, paste either diagram into [mermaid.live](https://mermaid.live) (Actions → Download SVG/PNG) or use [`@mermaid-js/mermaid-cli`](https://github.com/mermaid-js/mermaid-cli) (`mmdc`).
+
+## Tech stack
+
+See [`pyproject.toml`](../pyproject.toml) for dependency versions.
+
+| Layer | Choices |
+|-------|---------|
+| Language | **Python 3.11+** |
+| Packaging | **setuptools**; console script **`hoover`** → `datahoover.cli:main` |
+| CLI | **`argparse`** in [`src/datahoover/cli.py`](../src/datahoover/cli.py) |
+| HTTP | **httpx** |
+| Database | **DuckDB** (`data/warehouse.duckdb`; [`src/datahoover/storage/duckdb_store.py`](../src/datahoover/storage/duckdb_store.py)) |
+| Config | **TOML** — `tomllib` / **tomli**; `sources.toml` + merged `catalogs.toml` |
+| RSS/XML | **feedparser** |
+| Streaming | **websocket-client** (e.g. RIPE RIS Live) |
+| Secrets | `.env` where required by connectors |
+| Tests | **pytest** (optional dev extra) |
+| Static dashboard | [`scripts/build_dashboard.py`](../scripts/build_dashboard.py) — **vanilla JS** in template HTML, **Plotly** + **Leaflet** via CDN (not React) |
+| Cursor canvases | **React** `.canvas.tsx` + `cursor/canvas` — analytic canvases (e.g. **sharp-runup-bull-market**, Iran war / **market impact** narratives); source files usually live **outside** this repo; [`scripts/canvas_market_snapshot.py`](../scripts/canvas_market_snapshot.py) prints warehouse metrics to paste into a canvas; [`scripts/canvas-pdf/`](../scripts/canvas-pdf/) (Node, TypeScript, Playwright) can render a `.canvas.tsx` to PDF |
+
+```mermaid
+flowchart LR
+  subgraph core [Core pipeline]
+    py["Python 3.11 plus"]
+    hoover["hoover CLI argparse"]
+    httpx["httpx"]
+    duckdbLib["DuckDB file DB"]
+    toml["TOML config"]
+    fp["feedparser"]
+    wsc["websocket-client"]
+  end
+
+  subgraph dev [Dev and packaging]
+    setuptools["setuptools"]
+    pytest["pytest"]
+  end
+
+  subgraph optional [Optional auxiliary]
+    canvasPdf["canvas-pdf Node TS Playwright"]
+    dash["build_dashboard duckdb HTML"]
+  end
+
+  canvasTsx["Cursor canvas TSX React"] -.-> canvasPdf
+
+  setuptools --> hoover
+  py --> hoover
+  hoover --> httpx
+  hoover --> duckdbLib
+  hoover --> toml
+  hoover --> fp
+  hoover --> wsc
+  pytest -.-> hoover
+  duckdbLib --> dash
+```
+
+The dashed edge is the auxiliary PDF path for Cursor canvases, not part of the DuckDB ingest pipeline.
+
+## Static dashboard vs Cursor canvases
+
+- **Local signals dashboard** — Run `python scripts/build_dashboard.py` to emit `data/dashboard/index.html`. This is a **single static HTML page** with embedded **JavaScript**, **Plotly**, and **Leaflet**. It is **not** a React app.
+- **Cursor canvases** — Rich **React** UIs in **`.canvas.tsx`** (JSX, `cursor/canvas`). Examples you may use alongside this warehouse include the **sharp-runup-bull-market** canvas and **Iran war / market impact**–style analyses; exports such as a market-impact **PDF** typically come from the **canvas** toolchain ([`scripts/canvas-pdf/`](../scripts/canvas-pdf/)), not from `build_dashboard.py`.
+- **Data bridge** — The warehouse still supplies numbers (e.g. via [`scripts/canvas_market_snapshot.py`](../scripts/canvas_market_snapshot.py) after ingesting Twelve Data + FRED) for you to paste into canvas components as `Stat` / `Table` values.
 
 ## Active signal pipelines
 
@@ -104,7 +259,7 @@ Downstream apps (e.g. **TruthBot**) that need **primary-source facts**—a value
 
 - **Module:** [`src/datahoover/lookup.py`](../src/datahoover/lookup.py) — `get_observation`, `get_series`, frozen `Observation` with `as_json_dict()`.
 - **Qualified IDs** such as `BLS:LNS14000000`, `FRED:UNRATE`, and `CENSUS:B19013_001E@state:06` disambiguate sources; see **[docs/lookup.md](lookup.md)** for the full table, date rules, and stability guarantees.
-- **Starter `raw_only` sources** in `sources.toml`: `bls_truthbot_watchlist`, `census_acs_state_basic` — ingested for lookup/review; they do not register a signal producer (contract: `purpose = "raw_only"` in [`tests/test_sources_contract.py`](../tests/test_sources_contract.py)).
+- **Starter `raw_only` sources** in `sources.toml`: `bls_truthbot_watchlist`, `census_acs_state_basic`, `eia_petroleum_wpsr_weekly` — ingested for lookup/review; they do not register a signal producer (contract: `purpose = "raw_only"` in [`tests/test_sources_contract.py`](../tests/test_sources_contract.py)).
 
 ## Dark sources — ingested, no signal producer wired
 

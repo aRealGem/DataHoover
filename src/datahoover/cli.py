@@ -21,6 +21,7 @@ from .connectors.ripe_ris_live import ingest_ripe_ris_live
 from .connectors.ripe_atlas_probes import ingest_ripe_atlas_probes
 from .connectors.twelvedata_time_series import ingest_twelvedata_time_series
 from .connectors.fred_series import ingest_fred_series
+from .connectors.eia_v2 import ingest_eia_v2
 from .connectors.bls_timeseries import ingest_bls_timeseries
 from .connectors.census_acs import ingest_census_acs
 from .storage.duckdb_store import show_latest
@@ -138,6 +139,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_fred.add_argument("--source", type=str, default="fred_macro_watchlist", help="Source name from sources.toml")
     p_fred.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
     p_fred.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+
+    p_eia = sub.add_parser("ingest-eia", help="Ingest EIA Open Data v2 series into DuckDB")
+    p_eia.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
+    p_eia.add_argument("--source", type=str, default="eia_petroleum_wpsr_weekly", help="Source name from sources.toml")
+    p_eia.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
+    p_eia.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
 
     p_bls = sub.add_parser("ingest-bls", help="Ingest BLS Public Data API timeseries into DuckDB")
     p_bls.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
@@ -326,6 +333,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "ingest-fred":
         ingest_fred_series(
+            config_path=args.config,
+            source_name=args.source,
+            data_dir=args.data_dir,
+            db_path=args.db,
+        )
+        return 0
+
+    if args.cmd == "ingest-eia":
+        ingest_eia_v2(
             config_path=args.config,
             source_name=args.source,
             data_dir=args.data_dir,

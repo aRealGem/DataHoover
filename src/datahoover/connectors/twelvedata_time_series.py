@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,6 +20,30 @@ from ._retry import fetch_with_retry
 PRIMARY_GROUP = "primary"
 QUARTERLY_GROUP = "quarterly"
 QUARTER_INTERVAL_FALLBACK = "1week"
+
+
+class _Throttler:
+    """Minimum-interval gate between HTTP calls. Stateful per-instance.
+
+    Default `min_interval_seconds=0.0` is a no-op (paid tiers / tests). When set
+    via `min_interval_seconds` in `sources.toml`, sleeps before each `wait()` so
+    that consecutive calls are spaced by at least that interval.
+    """
+
+    def __init__(self, min_interval_seconds: float = 0.0) -> None:
+        self.min_interval_seconds = max(0.0, float(min_interval_seconds))
+        self._last_call: float = 0.0
+
+    def wait(self) -> None:
+        if self.min_interval_seconds <= 0.0:
+            self._last_call = time.monotonic()
+            return
+        now = time.monotonic()
+        elapsed = now - self._last_call if self._last_call else self.min_interval_seconds
+        gap = self.min_interval_seconds - elapsed
+        if gap > 0.0:
+            time.sleep(gap)
+        self._last_call = time.monotonic()
 
 
 @dataclass(frozen=True)
@@ -201,16 +226,20 @@ def _fetch_with_optional_fallback(
     requested_interval: str,
     outputsize: int,
     series_group: str,
+    throttler: Optional[_Throttler] = None,
 ) -> Tuple[FetchResult, str]:
     def _attempt(interval: str) -> Tuple[FetchResult, str]:
-        fr = fetch_with_retry(
-            lambda: fetch_time_series(
+        def _do_fetch() -> FetchResult:
+            if throttler is not None:
+                throttler.wait()
+            return fetch_time_series(
                 symbol,
                 api_key=api_key,
                 interval=interval,
                 outputsize=outputsize,
             )
-        )
+
+        fr = fetch_with_retry(_do_fetch)
         if fr.data is None:
             raise ValueError("Empty Twelve Data response")
         return fr, interval
@@ -267,6 +296,8 @@ def ingest_twelvedata_time_series(
 
     interval = source.extra.get("interval", "1day") if source.extra else "1day"
     outputsize = source.extra.get("outputsize", 30) if source.extra else 30
+    min_interval_seconds = float(source.extra.get("min_interval_seconds", 0.0)) if source.extra else 0.0
+    throttler = _Throttler(min_interval_seconds=min_interval_seconds)
 
     quarterly_symbols = _dedupe(source.extra.get("quarterly_symbols", [])) if source.extra else []
     quarter_interval = source.extra.get("quarter_interval", "1month") if source.extra else "1month"
@@ -294,6 +325,7 @@ def ingest_twelvedata_time_series(
                     requested_interval=requested_interval,
                     outputsize=plan_outputsize,
                     series_group=group,
+                    throttler=throttler,
                 )
             except Exception as exc:
                 print(f"[{source.name}] Warning: Failed to fetch {symbol} ({group}): {exc}")

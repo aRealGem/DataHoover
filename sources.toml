@@ -84,20 +84,50 @@ purpose = "raw_only"
 name = "twelvedata_watchlist_daily"
 kind = "twelvedata_time_series"
 description = "Twelve Data watchlist for equity ETFs, metals, crypto, and FX pairs (requires TWELVEDATA_API_KEY)."
-symbols = ["SPY", "QQQ", "DIA", "IWM", "GLD", "XAU/USD", "BTC/USD", "XMR/USD", "ETH/USD", "EUR/USD", "GBP/USD", "JPY/USD", "CHF/USD", "AUD/USD", "CAD/USD"]
-quarterly_symbols = ["SPY", "QQQ", "DIA", "IWM", "GLD"]
+symbols = [
+    "SPY", "QQQ", "DIA", "IWM", "RSP",
+    "GLD", "USO", "BNO", "UNG", "WEAT", "CORN", "SOYB", "MOO", "UUP",
+    "XAU/USD", "BTC/USD", "XMR/USD", "ETH/USD",
+    "EUR/USD", "GBP/USD", "JPY/USD", "CHF/USD", "AUD/USD", "CAD/USD",
+    "USD/MXN", "USD/INR", "USD/CNH", "USD/ILS", "USD/ZAR", "USD/BRL",
+    "LMT", "RTX", "NOC", "GD", "LHX", "HII", "ITA",
+    "BAESY", "SAABY", "RNMBY", "FINMY", "THLLY",
+    "ESLT", "MHVYF",
+]
+quarterly_symbols = ["SPY", "QQQ", "DIA", "IWM", "GLD", "RSP"]
 quarter_interval = "1month"
 interval = "1day"
-outputsize = 30
+outputsize = 90
+min_interval_seconds = 8.0
 
 
 [[sources]]
 name = "fred_macro_watchlist"
 kind = "fred_series"
 url = "https://api.stlouisfed.org/fred/series/observations"
-description = "FRED macro + FX watchlist (SP500, DJIA, NASDAQ, USD cross rates). Spot gold is sourced from Twelve Data (`XAU/USD`); the former FRED `GOLDAMGBD228NLBM` feed is discontinued and returns HTTP 400."
-series_ids = ["SP500", "DJIA", "NASDAQCOM", "DEXUSEU", "DEXUSUK", "DEXUSAL", "DEXJPUS"]
-limit = 180
+description = "FRED macro + FX watchlist (SP500, DJIA, NASDAQ, VIX, curve, HY OAS, USD cross rates). Spot gold from Twelve Data (`XAU/USD`); GOLDAMGBD228NLBM discontinued."
+series_ids = [
+    "SP500", "DJIA", "NASDAQCOM",
+    "VIXCLS", "T10Y2Y", "BAMLH0A0HYM2",
+    "DEXUSEU", "DEXUSUK", "DEXUSAL", "DEXJPUS",
+    "DCOILWTICO", "DCOILBRENTEU",
+    "DHHNGSP",
+    "GASREGCOVW",
+    "DTWEXBGS", "DTWEXAFEGS", "DTWEXEMEGS",
+    "DEXMXUS", "DEXBZUS", "DEXINUS", "DEXCHUS",
+    "DEXKOUS", "DEXSDUS", "DEXSFUS", "DEXTHUS",
+    "DEXSIUS", "DEXTAUS",
+]
+limit = 520
+
+[[sources]]
+name = "fred_commodity_monthly"
+kind = "fred_series"
+url = "https://api.stlouisfed.org/fred/series/observations"
+description = "FRED IMF/PPI commodity series (wheat, maize, soybeans, fertilizer index, US PPI mixed fertilizer). Monthly cadence; raw-only (not signaled)."
+series_ids = ["PWHEAMTUSDM", "PMAIZMTUSDM", "PSOYBUSDM", "PFERTINDEXM", "WPU0652013A"]
+limit = 60
+purpose = "raw_only"
 
 [[sources]]
 name = "fred_crypto_fx"
@@ -106,6 +136,17 @@ url = "https://api.stlouisfed.org/fred/series/observations"
 description = "FRED Coinbase crypto reference rates (BTC, ETH, experimental XMR)."
 series_ids = ["CBBTCUSD", "CBETHUSD", "CBXMRUSD"]
 limit = 120
+
+[[sources]]
+name = "eia_petroleum_wpsr_weekly"
+kind = "eia_v2"
+url = "https://api.eia.gov/v2/petroleum/sum/sndw/data"
+description = "EIA weekly petroleum summary: SPR (WCSSTUS1), crude incl. SPR (WCESTUS1), crude + products (WTTSTUS1). Requires EIA_API_KEY."
+route = "petroleum/sum/sndw"
+frequency = "weekly"
+series_ids = ["WCSSTUS1", "WCESTUS1", "WTTSTUS1"]
+length = 5000
+purpose = "raw_only"
 
 [[sources]]
 name = "bls_truthbot_watchlist"

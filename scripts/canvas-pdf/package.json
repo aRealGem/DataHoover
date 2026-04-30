@@ -1,0 +1,27 @@
+{
+  "name": "canvas-pdf",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Render a Cursor .canvas.tsx file to a PDF using Cursor's bundled canvas runtime.",
+  "type": "module",
+  "bin": {
+    "canvas-pdf": "./bin/canvas-pdf.mjs"
+  },
+  "scripts": {
+    "canvas-pdf": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "esbuild": "^0.24.0",
+    "playwright": "^1.48.0",
+    "tsx": "^4.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
