@@ -225,8 +225,9 @@ Each pipeline is: one or more raw sources → one producer function → rows in 
 
 **Lane:** non-commercial only — both feeding sources are CC-BY-NC-SA 4.0 (see `docs/licensing.md`). Signals derived from this producer must not be included in any commercial output.
 
-- `gdelt_democracy_24h` — GDELT 2.0 doc API, `query=democracy`, last 24h.
-- `gdelt_gkg_15min` — GDELT 2.0 GKG latest 15-min CSV drop (V2Tone, V2Themes, V2Persons/Locations/Organizations stashed in `raw_row_json` for later re-parsing). High volume (~50–150 MB unzipped per drop).
+- `gdelt_democracy_24h` — GDELT 2.0 doc API article list. **Article volume only** — live API no longer returns per-article tone in `mode=artlist`.
+- `gdelt_democracy_timelinetone` — GDELT 2.0 doc API `mode=timelinetone` (15-min bucket aggregate tone over the query window). The cheap, recommended source for tone — one HTTP call per ingest.
+- `gdelt_gkg_15min` — GDELT 2.0 GKG latest 15-min CSV drop (per-article V2Tone, V2Themes, V2Persons/Locations/Organizations stashed in `raw_row_json` for later re-parsing). High volume (~50–150 MB unzipped per drop).
 
 ## Producer registry
 

@@ -56,8 +56,9 @@ few entries below are conservative interpretations of ambiguous wording
 | `gdacs_alerts` | `proprietary-gdacs` | `with-attribution` | UN/EC joint initiative; site invites reuse but no formal CC licence — treat as attribution-required. |
 | `worldbank_gdp_usa` | `CC-BY-4.0` | `with-attribution` | World Bank Open Data Terms of Use. |
 | `worldbank_macro_fiscal` | `CC-BY-4.0` | `with-attribution` | Same. |
-| `gdelt_democracy_24h` | `CC-BY-NC-SA-4.0` | `non-commercial` | GDELT 2.0 explicit terms. **Excludes commercial reuse**. Feeds `_gdelt_tone_signals` (pipeline #9). |
-| `gdelt_gkg_15min` | `CC-BY-NC-SA-4.0` | `non-commercial` | GDELT 2.0 GKG (V2Tone, V2Themes, V2Persons/Locations/Organizations). **Excludes commercial reuse**. Feeds `_gdelt_tone_signals`. |
+| `gdelt_democracy_24h` | `CC-BY-NC-SA-4.0` | `non-commercial` | GDELT 2.0 doc API article list (mode=artlist). **Note**: live API no longer returns per-article tone in artlist mode — this source contributes article volume only. **Excludes commercial reuse**. |
+| `gdelt_democracy_timelinetone` | `CC-BY-NC-SA-4.0` | `non-commercial` | GDELT 2.0 doc API timelinetone (15-min bucket aggregate tone). **Live source for tone**, since artlist mode dropped that field. Feeds `_gdelt_tone_signals` (pipeline #9). |
+| `gdelt_gkg_15min` | `CC-BY-NC-SA-4.0` | `non-commercial` | GDELT 2.0 GKG (per-article V2Tone, V2Themes, V2Persons/Locations/Organizations). **Excludes commercial reuse**. Also feeds `_gdelt_tone_signals`. |
 | `ooni_us_recent` | `CC-BY-NC-SA-4.0` | `non-commercial` | OONI metadata. **Verify** — OONI's site has carried both NC-SA and SA in different revisions; conservative call. |
 | `caida_ioda_recent` | `proprietary-caida` | `non-commercial` | CAIDA AUP: research use; redistribution requires permission. |
 | `ripe_ris_live_10s` | `CC-BY-SA-4.0` | `share-alike` | RIPE NCC measurement data licence. |

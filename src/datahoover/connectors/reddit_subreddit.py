@@ -31,7 +31,14 @@ from ._retry import fetch_with_retry
 
 DEFAULT_BASE_URL = "https://www.reddit.com"
 DEFAULT_LIMIT = 100
-USER_AGENT = "data-hoover/0.1 (+local-first; contact: you@example.com)"
+# Reddit's API guidelines ask for UAs in the form
+#   `<platform>:<app id>:<version> (by /u/<reddit_user>)`
+# Default UAs and ad-hoc bot strings are aggressively rate-limited or 403'd.
+# Override at the source level via `extra.user_agent` in sources.toml — set it
+# to your own `(by /u/<your-handle>)` once you've verified the UA on a
+# logged-in browser session, or move to authenticated OAuth (see
+# docs/kanban/backlog.md).
+USER_AGENT = "python:datahoover:0.1 (by /u/anonymous)"
 HTTP_TIMEOUT_S = 30.0
 DEFAULT_MIN_INTERVAL_S = 1.0
 
@@ -56,9 +63,10 @@ def fetch_reddit_listing(
     listing: str = "new",
     limit: int = DEFAULT_LIMIT,
     timeout_s: float = HTTP_TIMEOUT_S,
+    user_agent: str = USER_AGENT,
 ) -> FetchResult:
     url = f"{base_url.rstrip('/')}/r/{subreddit}/{listing}.json"
-    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    headers = {"User-Agent": user_agent, "Accept": "application/json"}
     params = {"limit": str(limit), "raw_json": "1"}
     with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
         response = client.get(url, headers=headers, params=params)
@@ -168,6 +176,7 @@ def ingest_reddit_subreddit_json(
     listing = str(extra.get("listing") or "new")
     limit = int(extra.get("limit") or DEFAULT_LIMIT)
     min_interval_s = _parse_float(extra.get("min_interval_seconds")) or DEFAULT_MIN_INTERVAL_S
+    user_agent = str(extra.get("user_agent") or USER_AGENT)
     feed_url = source.url or DEFAULT_BASE_URL
 
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -192,7 +201,7 @@ def ingest_reddit_subreddit_json(
             try:
                 result = fetch_with_retry(
                     lambda s=sub: fetch_reddit_listing(
-                        feed_url, subreddit=s, listing=listing, limit=limit
+                        feed_url, subreddit=s, listing=listing, limit=limit, user_agent=user_agent
                     )
                 )
             except Exception as exc:

@@ -68,7 +68,15 @@ redistribute = "with-attribution"
 name = "gdelt_democracy_24h"
 kind = "gdelt_doc_query"
 url = "https://api.gdeltproject.org/api/v2/doc/doc?query=democracy&mode=artlist&maxrecords=50&format=json&timespan=1day"
-description = "GDELT doc API query for 'democracy' (last 24h, 50 records). Feeds the `sentiment_tone` signal producer."
+description = "GDELT doc API article list (last 24h, 50 records). Article-level metadata only — note: the live API no longer returns per-article tone in artlist mode, so this feed contributes article volume but not tone scores. Use `gdelt_democracy_timelinetone` (timelinetone mode) for tone, or `gdelt_gkg_15min` for per-article tone via GKG."
+license = "CC-BY-NC-SA-4.0"
+redistribute = "non-commercial"
+
+[[sources]]
+name = "gdelt_democracy_timelinetone"
+kind = "gdelt_timeline_tone"
+url = "https://api.gdeltproject.org/api/v2/doc/doc?query=democracy&mode=timelinetone&format=json&timespan=7day"
+description = "GDELT doc API timelinetone for 'democracy' (last 7 days, 15-min bucket aggregate tone). Feeds the `sentiment_tone` signal producer with already-aggregated per-bucket tone values."
 license = "CC-BY-NC-SA-4.0"
 redistribute = "non-commercial"
 
@@ -255,13 +263,14 @@ purpose = "raw_only"
 name = "reddit_sentiment_subs"
 kind = "reddit_subreddit_json"
 url = "https://www.reddit.com"
-description = "Reddit /new listings for finance / crypto / political-mood subreddits. Reddit ToS allows display but restricts redistribution; raw posts are personal/research lane. Default listing=new, limit=100 per sub, 1s throttle between subs."
+description = "Reddit /new listings for finance / crypto / political-mood subreddits. Reddit ToS allows display but restricts redistribution; raw posts are personal/research lane. Default listing=new, limit=100 per sub, 1s throttle between subs. Override `user_agent` with your own `(by /u/<your-handle>)` if you hit 403; some networks need OAuth (see docs/kanban/backlog.md)."
 license = "proprietary-reddit"
 redistribute = "display-only"
 subreddits = ["wallstreetbets", "cryptocurrency", "Bitcoin", "stocks", "economy", "politics"]
 listing = "new"
 limit = 100
 min_interval_seconds = 1.0
+# user_agent = "python:datahoover:0.1 (by /u/your-reddit-handle)"
 purpose = "raw_only"
 
 [[sources]]

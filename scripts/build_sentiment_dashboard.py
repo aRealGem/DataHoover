@@ -173,6 +173,40 @@ def _reddit_volume(con: duckdb.DuckDBPyConnection, hours: int) -> Tuple[List[Dic
     ], False
 
 
+def _rss_recent_items(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    source: str,
+    hours: int,
+    limit: int = 12,
+) -> Tuple[List[Dict[str, Any]], bool]:
+    if not _table_exists(con, "rss_items"):
+        return _synth_rss_items(), True
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    rows = con.execute(
+        """
+        SELECT title, link, summary, published_at
+        FROM rss_items
+        WHERE source = ?
+          AND (published_at IS NULL OR published_at >= ?)
+        ORDER BY published_at DESC NULLS LAST
+        LIMIT ?
+        """,
+        [source, cutoff, limit],
+    ).fetchall()
+    if not rows:
+        return _synth_rss_items(), True
+    return [
+        {
+            "title": t,
+            "link": ln,
+            "summary": s,
+            "published_at": str(p) if p else None,
+        }
+        for t, ln, s, p in rows
+    ], False
+
+
 def _gdelt_signals(con: duckdb.DuckDBPyConnection, hours: int) -> Tuple[List[Dict[str, Any]], bool]:
     if not _table_exists(con, "signals"):
         return _synth_gdelt_signals(), True
@@ -261,6 +295,30 @@ def _synth_reddit() -> List[Dict[str, Any]]:
         {"subreddit": "Bitcoin", "posts": 92, "total_score": 3870, "avg_score": 42.1},
         {"subreddit": "economy", "posts": 47, "total_score": 1340, "avg_score": 28.5},
         {"subreddit": "politics", "posts": 218, "total_score": 9820, "avg_score": 45.0},
+    ]
+
+
+def _synth_rss_items() -> List[Dict[str, Any]]:
+    base = datetime.now(timezone.utc)
+    return [
+        {
+            "title": "FOMC statement: target range maintained at 5.00–5.25%",
+            "link": "https://example.test/fomc-2026-05-01",
+            "summary": "The Federal Open Market Committee decided today to maintain the target range...",
+            "published_at": (base - timedelta(hours=4)).isoformat(),
+        },
+        {
+            "title": "Speech: Powell on financial conditions and consumer spending",
+            "link": "https://example.test/powell-2026-04-30",
+            "summary": "Chair Powell addressed the Economic Club of New York on...",
+            "published_at": (base - timedelta(hours=22)).isoformat(),
+        },
+        {
+            "title": "Beige Book release for the May meeting cycle",
+            "link": "https://example.test/beigebook-2026-04-29",
+            "summary": "Reports from the twelve Federal Reserve Districts indicate that...",
+            "published_at": (base - timedelta(hours=44)).isoformat(),
+        },
     ]
 
 
@@ -354,6 +412,13 @@ def render_html(bundle: Dict[str, Any]) -> str:
     <div class=\"card\"><h2>Reddit post volume (last 24h)</h2><div id=\"plot-reddit\" class=\"plot\"></div></div>
   </div>
 
+  <div class=\"card\"><h2>Federal Reserve press releases (recent)</h2>
+    <table id=\"rss-table\"><thead>
+      <tr><th style=\"width:14rem\">Published</th><th>Title</th></tr>
+    </thead><tbody></tbody></table>
+    <div class=\"legend\">Source: <code>rss_items</code> where <code>source='fed_press_releases_rss'</code>. Lane: PD-USGov / commercial-safe with attribution.</div>
+  </div>
+
   <div class=\"card\"><h2>GDELT sentiment-tone signals (recent)</h2>
     <table id=\"gdelt-table\"><thead>
       <tr><th>Topic</th><th>Severity</th><th>Avg tone</th><th>N articles</th><th>Window</th><th>Summary</th></tr>
@@ -409,6 +474,20 @@ const BUNDLE = {payload};
     {{ x: reddit.map(d => d.subreddit), y: reddit.map(d => d.posts), type: 'bar', marker: {{ color: '#ff4500' }}, name: 'Posts' }}
   ], {{ ...layoutBase }}, PLOTLY_OPTS);
 
+  // Fed RSS table
+  const rss = BUNDLE.panels.find(p => p.id === 'rss').data;
+  const rssBody = document.querySelector('#rss-table tbody');
+  for (const row of rss) {{
+    const tr = document.createElement('tr');
+    const safeTitle = (row.title || '').replace(/</g, '&lt;');
+    const link = row.link ? `<a href=\"${{row.link}}\" target=\"_blank\" rel=\"noreferrer\">${{safeTitle}}</a>` : safeTitle;
+    tr.innerHTML = `<td>${{row.published_at || '—'}}</td><td>${{link}}</td>`;
+    rssBody.appendChild(tr);
+  }}
+  if (!rss.length) {{
+    rssBody.innerHTML = '<tr><td colspan=\"2\" style=\"color:var(--muted)\">No press releases yet — run <code>hoover ingest-rss --source fed_press_releases_rss</code>.</td></tr>';
+  }}
+
   // GDELT table
   const gdelt = BUNDLE.panels.find(p => p.id === 'gdelt').data;
   const tbody = document.querySelector('#gdelt-table tbody');
@@ -451,6 +530,7 @@ def build_bundle(
         cnn_data, cnn_synth = _cnn_fg_series(con, days=days)
         st_data, st_synth = _stocktwits_bull_bear(con, hours=hours_window)
         reddit_data, reddit_synth = _reddit_volume(con, hours=hours_window)
+        rss_data, rss_synth = _rss_recent_items(con, source="fed_press_releases_rss", hours=hours_window * 14)
         gdelt_data, gdelt_synth = _gdelt_signals(con, hours=hours_window * 7)
     finally:
         con.close()
@@ -482,9 +562,15 @@ def build_bundle(
         },
         {
             "id": "gdelt", "title": "GDELT sentiment-tone signals",
-            "source": "gdelt_democracy_24h",
-            "lane": _lane_for(redistribute.get("gdelt_democracy_24h")),
+            "source": "gdelt_democracy_timelinetone",
+            "lane": _lane_for(redistribute.get("gdelt_democracy_timelinetone")),
             "synthetic": gdelt_synth, "data": gdelt_data,
+        },
+        {
+            "id": "rss", "title": "Federal Reserve press releases",
+            "source": "fed_press_releases_rss",
+            "lane": _lane_for(redistribute.get("fed_press_releases_rss")),
+            "synthetic": rss_synth, "data": rss_data,
         },
     ]
     return {

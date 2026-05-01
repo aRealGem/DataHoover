@@ -16,6 +16,7 @@ from .connectors.socrata_soda import ingest_socrata_soda
 from .connectors.opendatasoft_explore import ingest_opendatasoft_explore
 from .connectors.gdelt_doc_query import ingest_gdelt_doc_query
 from .connectors.gdelt_gkg import ingest_gdelt_gkg
+from .connectors.gdelt_timeline_tone import ingest_gdelt_timeline_tone
 from .connectors.ooni_measurements import ingest_ooni_measurements
 from .connectors.caida_ioda import ingest_ioda_events
 from .connectors.ripe_ris_live import ingest_ripe_ris_live
@@ -115,6 +116,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_gkg.add_argument("--source", type=str, default="gdelt_gkg_15min", help="Source name from sources.toml")
     p_gkg.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
     p_gkg.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+
+    p_gtone = sub.add_parser("ingest-gdelt-tone", help="Ingest GDELT 2.0 doc API timelinetone (aggregate tone over time)")
+    p_gtone.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
+    p_gtone.add_argument("--source", type=str, default="gdelt_democracy_timelinetone", help="Source name from sources.toml")
+    p_gtone.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
+    p_gtone.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
 
     p_ooni = sub.add_parser("ingest-ooni", help="Ingest OONI measurement metadata into DuckDB")
     p_ooni.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
@@ -330,6 +337,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "ingest-gdelt-gkg":
         ingest_gdelt_gkg(
+            config_path=args.config,
+            source_name=args.source,
+            data_dir=args.data_dir,
+            db_path=args.db,
+        )
+        return 0
+
+    if args.cmd == "ingest-gdelt-tone":
+        ingest_gdelt_timeline_tone(
             config_path=args.config,
             source_name=args.source,
             data_dir=args.data_dir,

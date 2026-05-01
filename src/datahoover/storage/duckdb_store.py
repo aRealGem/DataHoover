@@ -491,6 +491,19 @@ def init_db(db_path: Path) -> None:
             );
             """
         )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS gdelt_timeline_tone (
+              source       VARCHAR,
+              feed_url     VARCHAR,
+              series_name  VARCHAR,
+              ts           TIMESTAMP,
+              tone_value   DOUBLE,
+              raw_path     VARCHAR,
+              ingested_at  TIMESTAMP
+            );
+            """
+        )
         # Create indexes for performance
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_signal_id ON signals(signal_id);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_severity ON signals(severity_score DESC, computed_at DESC);")
@@ -540,6 +553,9 @@ def init_db(db_path: Path) -> None:
         )
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_rss_items_query ON rss_items(source, published_at DESC);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_gdelt_tone_key ON gdelt_timeline_tone(source, ts);"
         )
     finally:
         con.close()
@@ -1334,6 +1350,36 @@ def upsert_stocktwits_messages(db_path: Path, rows: list[dict]) -> int:
                     r.get("replies"),
                     r.get("symbols_json"),
                     r.get("raw_json"),
+                    r.get("raw_path"),
+                    r.get("ingested_at"),
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_gdelt_timeline_tone(db_path: Path, rows: list[dict]) -> int:
+    """Upsert GDELT timelinetone rows keyed by (source, ts)."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM gdelt_timeline_tone WHERE source = ? AND ts IS NOT DISTINCT FROM ?",
+                [r["source"], r.get("ts")],
+            )
+            con.execute(
+                """
+                INSERT INTO gdelt_timeline_tone VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r.get("feed_url"),
+                    r.get("series_name"),
+                    r.get("ts"),
+                    r.get("tone_value"),
                     r.get("raw_path"),
                     r.get("ingested_at"),
                 ],

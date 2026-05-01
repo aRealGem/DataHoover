@@ -869,14 +869,26 @@ def _gdelt_tone_signals(
     min_abs_avg_tone: float = 1.0,
     severity_denominator: float = 5.0,
 ) -> List[Dict[str, Any]]:
-    """Aggregate GDELT article-level tone scores per source over the lookback window.
+    """Aggregate GDELT tone scores per source over the lookback window.
 
-    Reads from `gdelt_docs` (doc API ingest, single-numeric tone) and `gdelt_gkg`
-    (GKG ingest, 7-tuple V2Tone with parsed `v2_tone_avg`). Each `source` in
-    `sources.toml` corresponds to one query topic; the producer emits one
-    `sentiment_tone` signal per (source, window) when there are at least
-    `min_articles` parseable rows and the absolute average tone is at least
-    `min_abs_avg_tone`. Severity = `min(1.0, |avg_tone| / severity_denominator)`.
+    Reads from three tables, in order of recommended priority:
+
+      1. `gdelt_timeline_tone` — pre-aggregated 15-min bucket tones from the
+         doc API's `mode=timelinetone`. Each row is one observation. This is
+         the cheapest way to populate the producer (one HTTP call per ingest).
+      2. `gdelt_gkg` — per-article V2Tone (first value) from the heavyweight
+         15-min GKG drop. Same observation shape as timeline buckets in
+         aggregate terms, just at finer granularity.
+      3. `gdelt_docs` — historical: the doc API's `mode=artlist` used to
+         return per-article tone, but the live API has dropped that field.
+         Rows here are still read for back-compat / fixture data; in
+         production this source contributes article volume only.
+
+    Each `source` in `sources.toml` corresponds to one query topic; the
+    producer emits one `sentiment_tone` signal per (source, window) when
+    there are at least `min_articles` parseable rows and the absolute average
+    tone is at least `min_abs_avg_tone`. Severity =
+    `min(1.0, |avg_tone| / severity_denominator)`.
     """
     aggregates: Dict[str, Dict[str, Any]] = {}
 
@@ -925,6 +937,33 @@ def _gdelt_tone_signals(
             if v21_date is not None and (agg["max_ts"] is None or v21_date > agg["max_ts"]):
                 agg["max_ts"] = v21_date
             agg["feeds"].add("gdelt_gkg")
+
+    if con.execute(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'gdelt_timeline_tone'"
+    ).fetchone()[0]:
+        # Each row is already an aggregate tone over a 15-min bucket. Treat each
+        # bucket as one observation in the per-source aggregate so the producer's
+        # avg is "average of bucket-averages" — which is what we want when the
+        # buckets are uniform-width.
+        for source, ts, tone_value in con.execute(
+            """
+            SELECT source, ts, tone_value
+            FROM gdelt_timeline_tone
+            WHERE ts >= ?
+            """,
+            [cutoff],
+        ).fetchall():
+            value = _as_float(tone_value)
+            if value is None:
+                continue
+            agg = aggregates.setdefault(
+                source,
+                {"tones": [], "max_ts": None, "feeds": set()},
+            )
+            agg["tones"].append(value)
+            if ts is not None and (agg["max_ts"] is None or ts > agg["max_ts"]):
+                agg["max_ts"] = ts
+            agg["feeds"].add("gdelt_timeline_tone")
 
     signals: List[Dict[str, Any]] = []
     sources = list(aggregates.keys())
@@ -999,7 +1038,11 @@ PRODUCER_SOURCES: Dict[str, List[str]] = {
     ],
     "weather_alert": ["nws_alerts_active"],
     "disaster_declaration": ["openfema_disaster_declarations"],
-    "sentiment_tone": ["gdelt_democracy_24h", "gdelt_gkg_15min"],
+    "sentiment_tone": [
+        "gdelt_democracy_24h",
+        "gdelt_democracy_timelinetone",
+        "gdelt_gkg_15min",
+    ],
 }
 
 # Module-level registry: ordered list of (name, adapter) where each adapter has the

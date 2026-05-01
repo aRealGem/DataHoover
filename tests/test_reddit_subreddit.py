@@ -118,9 +118,49 @@ def test_fetch_reddit_listing_sends_user_agent(monkeypatch):
     monkeypatch.setattr(reddit.httpx, "Client", FakeClient)
     reddit.fetch_reddit_listing("https://www.reddit.com", subreddit="stocks", listing="new", limit=50)
     assert captured["url"] == "https://www.reddit.com/r/stocks/new.json"
-    assert "data-hoover" in captured["headers"]["User-Agent"]
+    # Reddit requires a UA in `<platform>:<app id>:<version> (by /u/<user>)` form;
+    # bot-generic UAs get 403'd. Confirm the default matches that shape.
+    ua = captured["headers"]["User-Agent"]
+    assert ua.startswith("python:datahoover:")
+    assert "(by /u/" in ua
     assert captured["params"]["limit"] == "50"
     assert captured["params"]["raw_json"] == "1"
+
+
+def test_fetch_reddit_listing_honors_user_agent_override(monkeypatch):
+    captured: dict = {}
+
+    class FakeResponse:
+        status_code = 200
+        content = b"{}"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"kind": "Listing", "data": {"children": []}}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, headers=None, params=None):
+            captured["headers"] = dict(headers or {})
+            return FakeResponse()
+
+    monkeypatch.setattr(reddit.httpx, "Client", FakeClient)
+    reddit.fetch_reddit_listing(
+        "https://www.reddit.com",
+        subreddit="stocks",
+        user_agent="python:my-tool:2.3 (by /u/realhandle)",
+    )
+    assert captured["headers"]["User-Agent"] == "python:my-tool:2.3 (by /u/realhandle)"
 
 
 def test_fetch_reddit_listing_rejects_non_object_response(monkeypatch):

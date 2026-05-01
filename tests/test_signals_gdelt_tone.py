@@ -7,7 +7,12 @@ from pathlib import Path
 import duckdb
 
 from datahoover.signals import _gdelt_tone_signals
-from datahoover.storage.duckdb_store import init_db, upsert_gdelt_docs, upsert_gdelt_gkg
+from datahoover.storage.duckdb_store import (
+    init_db,
+    upsert_gdelt_docs,
+    upsert_gdelt_gkg,
+    upsert_gdelt_timeline_tone,
+)
 
 
 CUTOFF = datetime(2026, 5, 1, tzinfo=timezone.utc)
@@ -181,3 +186,64 @@ def test_threshold_overrides_via_kwargs(tmp_path):
     )
     signals = _run(db, min_articles=3)
     assert len(signals) == 1
+
+
+def _tone_row(source: str, value: float, ts: datetime, *, raw_path: str = "/r.json") -> dict:
+    return {
+        "source": source,
+        "feed_url": "https://example.test",
+        "series_name": "Article Tone",
+        "ts": ts,
+        "tone_value": value,
+        "raw_path": raw_path,
+        "ingested_at": INGESTED_AT,
+    }
+
+
+def test_emits_signal_from_gdelt_timeline_tone_alone(tmp_path):
+    """The doc API's mode=timelinetone is the live source for tone since
+    artlist mode no longer returns it. Producer must work from this table
+    even when gdelt_docs has no parseable tone rows."""
+    db = tmp_path / "x.duckdb"
+    init_db(db)
+    upsert_gdelt_timeline_tone(
+        db,
+        [
+            _tone_row("gdelt_democracy_timelinetone", -3.0, INGESTED_AT.replace(hour=h))
+            for h in range(6)
+        ],
+    )
+    signals = _run(db)
+    assert len(signals) == 1
+    s = signals[0]
+    assert s["entity_id"] == "gdelt_democracy_timelinetone"
+    assert s["severity_score"] == 0.6
+    import json
+    details = json.loads(s["details_json"])
+    assert details["feeds"] == ["gdelt_timeline_tone"]
+
+
+def test_combines_timeline_tone_with_gdelt_docs(tmp_path):
+    """When the same source name has data in both tables, average across all
+    parseable observations."""
+    db = tmp_path / "x.duckdb"
+    init_db(db)
+    # Same source name in both tables: 3 docs at -2.0 + 3 timelinetone rows at -4.0.
+    upsert_gdelt_docs(
+        db,
+        [_doc("gdelt_test_topic", "-2.0", doc_id=f"d{i}") for i in range(3)],
+    )
+    upsert_gdelt_timeline_tone(
+        db,
+        [
+            _tone_row("gdelt_test_topic", -4.0, INGESTED_AT.replace(hour=h))
+            for h in range(3)
+        ],
+    )
+    signals = _run(db)
+    assert len(signals) == 1
+    # avg = (3*-2 + 3*-4) / 6 = -3.0 -> severity 0.6.
+    assert signals[0]["severity_score"] == 0.6
+    import json
+    details = json.loads(signals[0]["details_json"])
+    assert set(details["feeds"]) == {"gdelt_docs", "gdelt_timeline_tone"}
