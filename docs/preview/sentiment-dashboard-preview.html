@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>DataHoover — sentiment dashboard</title>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <style>
+    :root { --bg:#f6f7fb; --fg:#1a1d26; --muted:#5c6578; --card:#fff; --border:#e2e6ef; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#12141a; --fg:#e8eaef; --muted:#9aa3b5; --card:#1c1f28; --border:#2a3142; }
+    }
+    * { box-sizing:border-box; }
+    body { font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; margin:0; background:var(--bg); color:var(--fg); }
+    header { padding:1rem 1.25rem; border-bottom:1px solid var(--border); background:var(--card); }
+    h1 { font-size:1.15rem; margin:0 0 .35rem; }
+    .sub { color:var(--muted); font-size:.85rem; }
+    main { padding:1rem; max-width:1200px; margin:0 auto; }
+    .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.75rem 1rem; margin-bottom:1rem; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(380px, 1fr)); gap:1rem; }
+    .chip { font-size:.7rem; padding:.18rem .5rem; border-radius:999px; background:var(--border); color:var(--fg); margin-left:.35rem; }
+    h2 { font-size:.95rem; margin:0 0 .5rem; color:var(--muted); font-weight:600; }
+    .plot { min-height: 320px; }
+    table { width:100%; border-collapse:collapse; font-size:.85rem; }
+    th,td { text-align:left; padding:.4rem .5rem; border-bottom:1px solid var(--border); }
+    th { color:var(--muted); font-weight:600; }
+    .legend { font-size:.75rem; color:var(--muted); margin-top:.4rem; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>DataHoover — sentiment dashboard</h1>
+  <div class="sub">Generated 2026-05-01T20:49:52.276094+00:00 · 5 panels · synthetic seeds appear when the underlying table is empty.</div>
+</header>
+<main>
+  <div class="card">
+    <h2>Lanes & provenance</h2>
+    <div class="card"><strong>Alt.me Crypto F&amp;G</strong> <span class="chip" style="background:#1f9d55;color:#fff">commercial-safe</span> <span class="chip" style="background:#7a3737;color:#fff">SYNTHETIC SEED</span></div><div class="card"><strong>CNN F&amp;G composite</strong> <span class="chip" style="background:#b07502;color:#fff">personal-use</span> <span class="chip" style="background:#7a3737;color:#fff">SYNTHETIC SEED</span></div><div class="card"><strong>StockTwits bull/bear</strong> <span class="chip" style="background:#b07502;color:#fff">personal-use</span> <span class="chip" style="background:#7a3737;color:#fff">SYNTHETIC SEED</span></div><div class="card"><strong>Reddit post volume</strong> <span class="chip" style="background:#b07502;color:#fff">personal-use</span> <span class="chip" style="background:#7a3737;color:#fff">SYNTHETIC SEED</span></div><div class="card"><strong>GDELT sentiment-tone signals</strong> <span class="chip" style="background:#b07502;color:#fff">personal-use</span> <span class="chip" style="background:#7a3737;color:#fff">SYNTHETIC SEED</span></div>
+  </div>
+
+  <div class="grid">
+    <div class="card"><h2>Alt.me Crypto Fear &amp; Greed (90d)</h2><div id="plot-altme" class="plot"></div></div>
+    <div class="card"><h2>CNN Fear &amp; Greed composite (90d)</h2><div id="plot-cnn" class="plot"></div></div>
+    <div class="card"><h2>StockTwits bull/bear (last 24h)</h2><div id="plot-st" class="plot"></div></div>
+    <div class="card"><h2>Reddit post volume (last 24h)</h2><div id="plot-reddit" class="plot"></div></div>
+  </div>
+
+  <div class="card"><h2>GDELT sentiment-tone signals (recent)</h2>
+    <table id="gdelt-table"><thead>
+      <tr><th>Topic</th><th>Severity</th><th>Avg tone</th><th>N articles</th><th>Window</th><th>Summary</th></tr>
+    </thead><tbody></tbody></table>
+    <div class="legend">Source: <code>signals</code> rows where <code>signal_type='sentiment_tone'</code>. Lane: personal-use only (CC-BY-NC-SA).</div>
+  </div>
+</main>
+
+<script>
+const BUNDLE = {"meta":{"generated_at":"2026-05-01T20:49:52.276094+00:00","panel_count":5,"lookback_days":90,"hours_window":24},"panels":[{"id":"altme","title":"Alt.me Crypto F&G","source":"alternative_me_fng_daily","lane":"commercial-safe","synthetic":true,"data":[{"date":"2026-02-01","value":40.2,"rating":"fear"},{"date":"2026-02-02","value":41.9,"rating":"fear"},{"date":"2026-02-03","value":43.8,"rating":"fear"},{"date":"2026-02-04","value":45.7,"rating":"neutral"},{"date":"2026-02-05","value":47.7,"rating":"neutral"},{"date":"2026-02-06","value":49.6,"rating":"neutral"},{"date":"2026-02-07","value":51.6,"rating":"neutral"},{"date":"2026-02-08","value":53.6,"rating":"neutral"},{"date":"2026-02-09","value":55.6,"rating":"greed"},{"date":"2026-02-10","value":57.4,"rating":"greed"},{"date":"2026-02-11","value":59.2,"rating":"greed"},{"date":"2026-02-12","value":60.9,"rating":"greed"},{"date":"2026-02-13","value":62.4,"rating":"greed"},{"date":"2026-02-14","value":63.7,"rating":"greed"},{"date":"2026-02-15","value":65.0,"rating":"greed"},{"date":"2026-02-16","value":66.0,"rating":"greed"},{"date":"2026-02-17","value":66.8,"rating":"greed"},{"date":"2026-02-18","value":67.4,"rating":"greed"},{"date":"2026-02-19","value":67.8,"rating":"greed"},{"date":"2026-02-20","value":68.0,"rating":"greed"},{"date":"2026-02-21","value":67.9,"rating":"greed"},{"date":"2026-02-22","value":67.7,"rating":"greed"},{"date":"2026-02-23","value":67.2,"rating":"greed"},{"date":"2026-02-24","value":66.5,"rating":"greed"},{"date":"2026-02-25","value":65.6,"rating":"greed"},{"date":"2026-02-26","value":64.5,"rating":"greed"},{"date":"2026-02-27","value":63.3,"rating":"greed"},{"date":"2026-02-28","value":61.8,"rating":"greed"},{"date":"2026-03-01","value":60.2,"rating":"greed"},{"date":"2026-03-02","value":58.5,"rating":"greed"},{"date":"2026-03-03","value":56.7,"rating":"greed"},{"date":"2026-03-04","value":54.8,"rating":"neutral"},{"date":"2026-03-05","value":52.9,"rating":"neutral"},{"date":"2026-03-06","value":50.9,"rating":"neutral"},{"date":"2026-03-07","value":48.9,"rating":"neutral"},{"date":"2026-03-08","value":46.9,"rating":"neutral"},{"date":"2026-03-09","value":45.0,"rating":"fear"},{"date":"2026-03-10","value":43.1,"rating":"fear"},{"date":"2026-03-11","value":41.3,"rating":"fear"},{"date":"2026-03-12","value":39.6,"rating":"fear"},{"date":"2026-03-13","value":38.0,"rating":"fear"},{"date":"2026-03-14","value":36.6,"rating":"fear"},{"date":"2026-03-15","value":35.4,"rating":"fear"},{"date":"2026-03-16","value":34.3,"rating":"fear"},{"date":"2026-03-17","value":33.4,"rating":"fear"},{"date":"2026-03-18","value":32.7,"rating":"fear"},{"date":"2026-03-19","value":32.3,"rating":"fear"},{"date":"2026-03-20","value":32.0,"rating":"fear"},{"date":"2026-03-21","value":32.0,"rating":"fear"},{"date":"2026-03-22","value":32.2,"rating":"fear"},{"date":"2026-03-23","value":32.6,"rating":"fear"},{"date":"2026-03-24","value":33.3,"rating":"fear"},{"date":"2026-03-25","value":34.1,"rating":"fear"},{"date":"2026-03-26","value":35.2,"rating":"fear"},{"date":"2026-03-27","value":36.4,"rating":"fear"},{"date":"2026-03-28","value":37.8,"rating":"fear"},{"date":"2026-03-29","value":39.3,"rating":"fear"},{"date":"2026-03-30","value":41.0,"rating":"fear"},{"date":"2026-03-31","value":42.8,"rating":"fear"},{"date":"2026-04-01","value":44.6,"rating":"fear"},{"date":"2026-04-02","value":46.6,"rating":"neutral"},{"date":"2026-04-03","value":48.6,"rating":"neutral"},{"date":"2026-04-04","value":50.5,"rating":"neutral"},{"date":"2026-04-05","value":52.5,"rating":"neutral"},{"date":"2026-04-06","value":54.5,"rating":"neutral"},{"date":"2026-04-07","value":56.4,"rating":"greed"},{"date":"2026-04-08","value":58.2,"rating":"greed"},{"date":"2026-04-09","value":60.0,"rating":"greed"},{"date":"2026-04-10","value":61.6,"rating":"greed"},{"date":"2026-04-11","value":63.0,"rating":"greed"},{"date":"2026-04-12","value":64.3,"rating":"greed"},{"date":"2026-04-13","value":65.4,"rating":"greed"},{"date":"2026-04-14","value":66.4,"rating":"greed"},{"date":"2026-04-15","value":67.1,"rating":"greed"},{"date":"2026-04-16","value":67.6,"rating":"greed"},{"date":"2026-04-17","value":67.9,"rating":"greed"},{"date":"2026-04-18","value":68.0,"rating":"greed"},{"date":"2026-04-19","value":67.9,"rating":"greed"},{"date":"2026-04-20","value":67.5,"rating":"greed"},{"date":"2026-04-21","value":66.9,"rating":"greed"},{"date":"2026-04-22","value":66.1,"rating":"greed"},{"date":"2026-04-23","value":65.1,"rating":"greed"},{"date":"2026-04-24","value":64.0,"rating":"greed"},{"date":"2026-04-25","value":62.6,"rating":"greed"},{"date":"2026-04-26","value":61.1,"rating":"greed"},{"date":"2026-04-27","value":59.5,"rating":"greed"},{"date":"2026-04-28","value":57.7,"rating":"greed"},{"date":"2026-04-29","value":55.9,"rating":"greed"},{"date":"2026-04-30","value":54.0,"rating":"neutral"},{"date":"2026-05-01","value":52.0,"rating":"neutral"}]},{"id":"cnn","title":"CNN F&G composite","source":"cnn_fear_greed_daily","lane":"personal-use","synthetic":true,"data":[{"date":"2026-02-01","value":38.0,"rating":"fear"},{"date":"2026-02-02","value":40.1,"rating":"fear"},{"date":"2026-02-03","value":42.3,"rating":"fear"},{"date":"2026-02-04","value":44.6,"rating":"fear"},{"date":"2026-02-05","value":47.0,"rating":"neutral"},{"date":"2026-02-06","value":49.4,"rating":"neutral"},{"date":"2026-02-07","value":51.8,"rating":"neutral"},{"date":"2026-02-08","value":54.2,"rating":"neutral"},{"date":"2026-02-09","value":56.5,"rating":"greed"},{"date":"2026-02-10","value":58.8,"rating":"greed"},{"date":"2026-02-11","value":60.9,"rating":"greed"},{"date":"2026-02-12","value":62.9,"rating":"greed"},{"date":"2026-02-13","value":64.7,"rating":"greed"},{"date":"2026-02-14","value":66.4,"rating":"greed"},{"date":"2026-02-15","value":67.8,"rating":"greed"},{"date":"2026-02-16","value":69.0,"rating":"greed"},{"date":"2026-02-17","value":70.0,"rating":"greed"},{"date":"2026-02-18","value":70.7,"rating":"greed"},{"date":"2026-02-19","value":71.2,"rating":"greed"},{"date":"2026-02-20","value":71.4,"rating":"greed"},{"date":"2026-02-21","value":71.3,"rating":"greed"},{"date":"2026-02-22","value":70.9,"rating":"greed"},{"date":"2026-02-23","value":70.3,"rating":"greed"},{"date":"2026-02-24","value":69.4,"rating":"greed"},{"date":"2026-02-25","value":68.3,"rating":"greed"},{"date":"2026-02-26","value":66.9,"rating":"greed"},{"date":"2026-02-27","value":65.3,"rating":"greed"},{"date":"2026-02-28","value":63.6,"rating":"greed"},{"date":"2026-03-01","value":61.6,"rating":"greed"},{"date":"2026-03-02","value":59.5,"rating":"greed"},{"date":"2026-03-03","value":57.2,"rating":"greed"},{"date":"2026-03-04","value":54.9,"rating":"neutral"},{"date":"2026-03-05","value":52.5,"rating":"neutral"},{"date":"2026-03-06","value":50.0,"rating":"neutral"},{"date":"2026-03-07","value":47.5,"rating":"neutral"},{"date":"2026-03-08","value":45.1,"rating":"neutral"},{"date":"2026-03-09","value":42.7,"rating":"fear"},{"date":"2026-03-10","value":40.3,"rating":"fear"},{"date":"2026-03-11","value":38.1,"rating":"fear"},{"date":"2026-03-12","value":36.0,"rating":"fear"},{"date":"2026-03-13","value":34.0,"rating":"fear"},{"date":"2026-03-14","value":32.3,"rating":"fear"},{"date":"2026-03-15","value":30.7,"rating":"fear"},{"date":"2026-03-16","value":29.4,"rating":"fear"},{"date":"2026-03-17","value":28.3,"rating":"fear"},{"date":"2026-03-18","value":27.4,"rating":"fear"},{"date":"2026-03-19","value":26.8,"rating":"fear"},{"date":"2026-03-20","value":26.5,"rating":"fear"},{"date":"2026-03-21","value":26.4,"rating":"fear"},{"date":"2026-03-22","value":26.6,"rating":"fear"},{"date":"2026-03-23","value":27.1,"rating":"fear"},{"date":"2026-03-24","value":27.9,"rating":"fear"},{"date":"2026-03-25","value":28.9,"rating":"fear"},{"date":"2026-03-26","value":30.1,"rating":"fear"},{"date":"2026-03-27","value":31.6,"rating":"fear"},{"date":"2026-03-28","value":33.2,"rating":"fear"},{"date":"2026-03-29","value":35.1,"rating":"fear"},{"date":"2026-03-30","value":37.1,"rating":"fear"},{"date":"2026-03-31","value":39.2,"rating":"fear"},{"date":"2026-04-01","value":41.5,"rating":"fear"},{"date":"2026-04-02","value":43.8,"rating":"fear"},{"date":"2026-04-03","value":46.2,"rating":"neutral"},{"date":"2026-04-04","value":48.6,"rating":"neutral"},{"date":"2026-04-05","value":51.0,"rating":"neutral"},{"date":"2026-04-06","value":53.4,"rating":"neutral"},{"date":"2026-04-07","value":55.7,"rating":"greed"},{"date":"2026-04-08","value":57.9,"rating":"greed"},{"date":"2026-04-09","value":59.9,"rating":"greed"},{"date":"2026-04-10","value":61.9,"rating":"greed"},{"date":"2026-04-11","value":63.6,"rating":"greed"},{"date":"2026-04-12","value":65.2,"rating":"greed"},{"date":"2026-04-13","value":66.5,"rating":"greed"},{"date":"2026-04-14","value":67.6,"rating":"greed"},{"date":"2026-04-15","value":68.5,"rating":"greed"},{"date":"2026-04-16","value":69.1,"rating":"greed"},{"date":"2026-04-17","value":69.4,"rating":"greed"},{"date":"2026-04-18","value":69.5,"rating":"greed"},{"date":"2026-04-19","value":69.3,"rating":"greed"},{"date":"2026-04-20","value":68.8,"rating":"greed"},{"date":"2026-04-21","value":68.0,"rating":"greed"},{"date":"2026-04-22","value":67.0,"rating":"greed"},{"date":"2026-04-23","value":65.8,"rating":"greed"},{"date":"2026-04-24","value":64.3,"rating":"greed"},{"date":"2026-04-25","value":62.7,"rating":"greed"},{"date":"2026-04-26","value":60.8,"rating":"greed"},{"date":"2026-04-27","value":58.8,"rating":"greed"},{"date":"2026-04-28","value":56.6,"rating":"greed"},{"date":"2026-04-29","value":54.3,"rating":"neutral"},{"date":"2026-04-30","value":51.9,"rating":"neutral"},{"date":"2026-05-01","value":49.5,"rating":"neutral"}]},{"id":"stocktwits","title":"StockTwits bull/bear","source":"stocktwits_watchlist","lane":"personal-use","synthetic":true,"data":[{"symbol":"SPY","total":142,"bull":95,"bear":32},{"symbol":"QQQ","total":88,"bull":41,"bear":39},{"symbol":"BTC.X","total":76,"bull":50,"bear":18},{"symbol":"ETH.X","total":54,"bull":30,"bear":19},{"symbol":"GLD","total":31,"bull":22,"bear":5},{"symbol":"DIA","total":22,"bull":11,"bear":8},{"symbol":"IWM","total":18,"bull":7,"bear":9}]},{"id":"reddit","title":"Reddit post volume","source":"reddit_sentiment_subs","lane":"personal-use","synthetic":true,"data":[{"subreddit":"wallstreetbets","posts":412,"total_score":18230,"avg_score":44.2},{"subreddit":"stocks","posts":156,"total_score":8420,"avg_score":54.0},{"subreddit":"cryptocurrency","posts":138,"total_score":6210,"avg_score":45.0},{"subreddit":"Bitcoin","posts":92,"total_score":3870,"avg_score":42.1},{"subreddit":"economy","posts":47,"total_score":1340,"avg_score":28.5},{"subreddit":"politics","posts":218,"total_score":9820,"avg_score":45.0}]},{"id":"gdelt","title":"GDELT sentiment-tone signals","source":"gdelt_democracy_24h","lane":"personal-use","synthetic":true,"data":[{"topic":"gdelt_democracy_24h","severity":0.62,"summary":"GDELT negative sentiment for gdelt_democracy_24h: avg_tone=-3.10 over 47 articles","ts_start":"2026-04-30T00:00:00+00:00","ts_end":"2026-05-01T00:00:00+00:00","avg_tone":-3.1,"n_articles":47}]}]};
+
+(function() {
+  const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const layoutBase = {
+    margin: { t: 30, r: 20, b: 40, l: 50 },
+    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+    font: { color: dark ? '#e8eaef' : '#1a1d26' },
+    xaxis: { gridcolor: dark ? '#2a3142' : '#e2e6ef' },
+    yaxis: { gridcolor: dark ? '#2a3142' : '#e2e6ef' }
+  };
+  const PLOTLY_OPTS = { displayModeBar: false, responsive: true };
+
+  // Alt.me F&G
+  const altme = BUNDLE.panels.find(p => p.id === 'altme').data;
+  Plotly.newPlot('plot-altme', [
+    {
+      x: altme.map(d => d.date), y: altme.map(d => d.value),
+      type: 'scatter', mode: 'lines', line: { color: '#f4a900', width: 2 },
+      name: 'F&G'
+    }
+  ], { ...layoutBase, yaxis: { ...layoutBase.yaxis, range: [0, 100], title: '0=Extreme Fear · 100=Extreme Greed' } }, PLOTLY_OPTS);
+
+  // CNN F&G
+  const cnn = BUNDLE.panels.find(p => p.id === 'cnn').data;
+  Plotly.newPlot('plot-cnn', [
+    {
+      x: cnn.map(d => d.date), y: cnn.map(d => d.value),
+      type: 'scatter', mode: 'lines', line: { color: '#7159b5', width: 2 },
+      name: 'CNN composite'
+    }
+  ], { ...layoutBase, yaxis: { ...layoutBase.yaxis, range: [0, 100] } }, PLOTLY_OPTS);
+
+  // StockTwits bull/bear
+  const st = BUNDLE.panels.find(p => p.id === 'stocktwits').data;
+  Plotly.newPlot('plot-st', [
+    { x: st.map(d => d.symbol), y: st.map(d => d.bull), name: 'Bullish', type: 'bar', marker: { color: '#1f9d55' } },
+    { x: st.map(d => d.symbol), y: st.map(d => d.bear), name: 'Bearish', type: 'bar', marker: { color: '#cc1f1a' } }
+  ], { ...layoutBase, barmode: 'group' }, PLOTLY_OPTS);
+
+  // Reddit
+  const reddit = BUNDLE.panels.find(p => p.id === 'reddit').data;
+  Plotly.newPlot('plot-reddit', [
+    { x: reddit.map(d => d.subreddit), y: reddit.map(d => d.posts), type: 'bar', marker: { color: '#ff4500' }, name: 'Posts' }
+  ], { ...layoutBase }, PLOTLY_OPTS);
+
+  // GDELT table
+  const gdelt = BUNDLE.panels.find(p => p.id === 'gdelt').data;
+  const tbody = document.querySelector('#gdelt-table tbody');
+  for (const row of gdelt) {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td>${row.topic}</td>` +
+      `<td>${(row.severity ?? 0).toFixed(2)}</td>` +
+      `<td>${row.avg_tone == null ? '—' : Number(row.avg_tone).toFixed(2)}</td>` +
+      `<td>${row.n_articles ?? '—'}</td>` +
+      `<td>${row.ts_start} → ${row.ts_end ?? ''}</td>` +
+      `<td>${row.summary ?? ''}</td>`;
+    tbody.appendChild(tr);
+  }
+  if (!gdelt.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">No sentiment_tone signals yet — run <code>hoover ingest-gdelt</code> then <code>hoover compute-signals --since 7d</code>.</td></tr>';
+  }
+})();
+</script>
+</body>
+</html>

@@ -30,3 +30,53 @@ Triaged but not yet started. Pull the top card when starting work.
 - **Added:** 2026-04-22  **Owner:** unassigned
 - **Problem:** `docs/lookup.md` is thorough but long; TruthBot integrators want a one-page quickstart.
 - **Acceptance:** Add a "Quickstart" section at the top of `docs/lookup.md` with a 5-line copy-paste example and the minimum ingest commands needed to populate the DB.
+
+---
+
+### [signals] Sentiment-text producer over Reddit / StockTwits / GKG content
+- **Added:** 2026-05-01  **Owner:** unassigned
+- **Problem:** Phase 2 connectors (Reddit, StockTwits, GKG) populate `reddit_posts`, `stocktwits_messages`, and `gdelt_gkg` with raw text but no producer scores them. The headline value (Bullish/Bearish, GKG MOOD_* themes, Reddit upvote-weighted tone) is sitting un-aggregated.
+- **Acceptance:**
+  - New `_text_sentiment_signals` producer (or extend `_gdelt_tone_signals`) that:
+    - Bullish/Bearish counts per StockTwits symbol per window → `signal_type=stocktwits_sentiment`.
+    - Reddit post-volume + score-weighted aggregation per subreddit per window → `signal_type=reddit_sentiment`.
+    - GKG `MOOD_HAPPY` / `MOOD_ANGER` / `ECON_*` theme counts per source per window → optional second pass on top of `_gdelt_tone_signals`.
+  - Threshold defaults under `[signals.text_sentiment]` in `sources.toml`.
+  - Tests in the same shape as `test_signals_gdelt_tone.py`.
+- **Notes:** Reddit/StockTwits/GKG are **non-commercial / display-only lanes**. Any commercial product must filter these out. See `docs/licensing.md` lane semantics. Pure rule-based aggregation (counts, score-weighted) is enough for the first pass — no LLM scoring needed.
+
+---
+
+### [connectors] Migrate gdacs_rss to use generic_rss
+- **Added:** 2026-05-01  **Owner:** unassigned
+- **Problem:** `gdacs_rss.py` depends on `feedparser`, which depends on `sgmllib3k`, which fails to build on Python 3.11+ (sandbox / clean envs). The new `generic_rss` connector uses stdlib `xml.etree.ElementTree` and handles both RSS 2.0 and Atom — `gdacs_alerts` could move to it and we'd retire the feedparser dep entirely.
+- **Acceptance:**
+  - Refactor `_gdacs_signals` to read from `rss_items` instead of `gdacs_alerts` (or wire a parallel reader and migrate over a few releases).
+  - Drop `feedparser` from `pyproject.toml`.
+  - `tests/test_gdacs_parse.py` updated or replaced with a fixture-driven test on the new path.
+- **Notes:** Cross-cutting refactor; needs care to avoid breaking the existing `_gdacs_signals` producer. Probably worth a separate PR.
+
+---
+
+### [env] feedparser / sgmllib3k build failure on Python 3.11+
+- **Added:** 2026-05-01  **Owner:** unassigned
+- **Problem:** `pip install -e .` fails to build the `sgmllib3k` transitive dep of `feedparser` on Python 3.11+ because `sgmllib3k` still uses `2to3`. Two existing tests (`test_gdacs_parse.py`, `test_signals_compute.py`) silently skip-collect with `ModuleNotFoundError: No module named 'sgmllib'` on a clean env.
+- **Acceptance:**
+  - Either: pin a feedparser version that ships its own SGML shim (none currently), or migrate gdacs to `generic_rss` (see card above), or add `sgmllib3k` as an optional extra and gate the gdacs tests on its presence.
+- **Notes:** Blocks `run-all-tests.sh` from completing on a fresh environment. Workaround for now: `pytest --ignore=tests/test_gdacs_parse.py --ignore=tests/test_signals_compute.py`.
+
+---
+
+### [dashboard] Surface new sentiment sources in the static dashboard
+- **Added:** 2026-05-01  **Owner:** unassigned
+- **Problem:** `scripts/build_dashboard.py` was written before the Tier 1 / Tier 2 sentiment sources existed. It does not surface `alternative_me_fng`, `cnn_fear_greed`, `reddit_posts`, `stocktwits_messages`, or `rss_items` panels.
+- **Acceptance:**
+  - Add a "Sentiment" section to the dashboard with: alt.me F&G + CNN F&G time series, top-N most-discussed StockTwits symbols (last 24h with bull/bear ratio), top-N Reddit posts by score per sub.
+  - Tag each panel with its redistribution lane so commercial vs personal-use is obvious at a glance.
+
+---
+
+### [publishing] Lane-resolver helpers for the publication pipeline
+- **Added:** 2026-05-01  **Owner:** Phase 4 session
+- **Problem:** Phase 4 (canvas → PDF → ExpressionPi) needs `lane_for_redistribute()`, `lane_for_publication()`, and `attribution_block()` helpers to compute the worst-case lane across sources used in a publication and render the attribution footer. Schema (`Source.license`, `Source.redistribute`, `LICENSE_TAGS`, `REDISTRIBUTE_TAGS`) is already on the branch — these helpers are publication-scope and belong in the Phase 4 PR.
+- **Acceptance:** Implemented as part of `scripts/publish_to_expressionpi.py` or a new `datahoover/lane.py` (publication-side), with tests.
