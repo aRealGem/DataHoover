@@ -3,18 +3,24 @@ name = "usgs_all_day"
 kind = "usgs_earthquakes_geojson"
 url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson"
 description = "USGS earthquakes - all earthquakes, past day (GeoJSON summary). Updated frequently."
+license = "PD-USGov"
+redistribute = "public-domain"
 
 [[sources]]
 name = "usgs_catalog_m45_day"
 kind = "usgs_fdsn_events"
 url = "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&minmagnitude=4.5&limit=200"
 description = "USGS FDSN event service (M4.5+, last 24h; params set at runtime)."
+license = "PD-USGov"
+redistribute = "public-domain"
 
 [[sources]]
 name = "eurostat_gdp"
 kind = "eurostat_statistics_json"
 url = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/nama_10_gdp?time=2020&geo=EU27_2020&unit=CLV10_MEUR&na_item=B1GQ&format=JSON"
 description = "Eurostat GDP (EU27 2020, 2020, chain-linked volume)."
+license = "eu-commission-reuse"
+redistribute = "with-attribution"
 purpose = "raw_only"
 
 [[sources]]
@@ -22,24 +28,32 @@ name = "openfema_disaster_declarations"
 kind = "openfema_disaster_declarations"
 url = "https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?$top=1000&$select=femaDeclarationString,disasterNumber,state,declarationType,declarationDate,incidentType,declarationTitle,incidentBeginDate,incidentEndDate"
 description = "OpenFEMA disaster declarations (summary fields)."
+license = "PD-USGov"
+redistribute = "public-domain"
 
 [[sources]]
 name = "nws_alerts_active"
 kind = "nws_alerts_active"
 url = "https://api.weather.gov/alerts/active?status=actual"
 description = "NWS active alerts (weather.gov API)."
+license = "PD-USGov"
+redistribute = "public-domain"
 
 [[sources]]
 name = "gdacs_alerts"
 kind = "gdacs_rss"
 url = "https://www.gdacs.org/xml/rss.xml"
 description = "GDACS alerts feed (RSS/XML)."
+license = "proprietary-gdacs"
+redistribute = "with-attribution"
 
 [[sources]]
 name = "worldbank_gdp_usa"
 kind = "worldbank_indicator"
 url = "https://api.worldbank.org/v2/country/USA/indicator/NY.GDP.MKTP.CD?format=json&per_page=20000&date=2020:2026"
 description = "World Bank GDP (current US$) for USA (2020-2026)."
+license = "CC-BY-4.0"
+redistribute = "with-attribution"
 purpose = "raw_only"
 
 [[sources]]
@@ -47,12 +61,16 @@ name = "worldbank_macro_fiscal"
 kind = "worldbank_macro_fiscal"
 url = "https://api.worldbank.org/v2/country/all/indicator/NY.GDP.MKTP.CN;NY.GDP.MKTP.PP.CD;PA.NUS.PPP;GC.DOD.TOTL.GD.ZS;GC.NLD.TOTL.GD.ZS;GC.REV.XGRT.GD.ZS;GC.REV.XGRT.CN;GC.XPN.INTP.CN?format=json&per_page=20000&source=2&date=2020:2026"
 description = "World Bank macro/fiscal indicators (WDI source=2, multi-indicator, 2020-2026)."
+license = "CC-BY-4.0"
+redistribute = "with-attribution"
 
 [[sources]]
 name = "gdelt_democracy_24h"
 kind = "gdelt_doc_query"
 url = "https://api.gdeltproject.org/api/v2/doc/doc?query=democracy&mode=artlist&maxrecords=50&format=json&timespan=1day"
 description = "GDELT doc API query for 'democracy' (last 24h, 50 records)."
+license = "CC-BY-NC-SA-4.0"
+redistribute = "non-commercial"
 purpose = "raw_only"
 
 [[sources]]
@@ -60,30 +78,40 @@ name = "ooni_us_recent"
 kind = "ooni_measurements"
 url = "https://api.ooni.io/api/v1/measurements?probe_cc=US"
 description = "OONI measurement metadata for US (defaults: last 24h, 50 records)."
+license = "CC-BY-NC-SA-4.0"
+redistribute = "non-commercial"
 
 [[sources]]
 name = "caida_ioda_recent"
 kind = "caida_ioda"
 url = "https://api.ioda.inetintel.cc.gatech.edu/v2/outages/events"
 description = "CAIDA IODA recent outage events (defaults: last 24h, datasource=bgp)."
+license = "proprietary-caida"
+redistribute = "non-commercial"
 
 [[sources]]
 name = "ripe_ris_live_10s"
 kind = "ripe_ris_live"
 url = "wss://ris-live.ripe.net/v1/ws/"
 description = "RIPE RIS Live websocket (captures ~10s of UPDATE messages from rrc00)."
+license = "CC-BY-SA-4.0"
+redistribute = "share-alike"
 
 [[sources]]
 name = "ripe_atlas_probes"
 kind = "ripe_atlas_probes"
 url = "https://atlas.ripe.net/api/v2/probes/?page=1&page_size=50"
 description = "RIPE Atlas probe metadata (page 1, 50 probes)."
+license = "CC-BY-SA-4.0"
+redistribute = "share-alike"
 purpose = "raw_only"
 
 [[sources]]
 name = "twelvedata_watchlist_daily"
 kind = "twelvedata_time_series"
 description = "Twelve Data watchlist for equity ETFs, metals, crypto, and FX pairs (requires TWELVEDATA_API_KEY)."
+license = "proprietary-twelvedata"
+redistribute = "display-only"
 symbols = [
     "SPY", "QQQ", "DIA", "IWM", "RSP",
     "GLD", "USO", "BNO", "UNG", "WEAT", "CORN", "SOYB", "MOO", "UUP",
@@ -105,10 +133,13 @@ min_interval_seconds = 8.0
 name = "fred_macro_watchlist"
 kind = "fred_series"
 url = "https://api.stlouisfed.org/fred/series/observations"
-description = "FRED macro + FX watchlist (SP500, DJIA, NASDAQ, VIX, curve, HY OAS, USD cross rates). Spot gold from Twelve Data (`XAU/USD`); GOLDAMGBD228NLBM discontinued."
+description = "FRED macro + FX watchlist (SP500, DJIA, NASDAQ, VIX, curve, HY OAS, USD cross rates, U. Michigan consumer sentiment). Spot gold from Twelve Data (`XAU/USD`); GOLDAMGBD228NLBM discontinued."
+license = "mixed-fred"
+redistribute = "with-attribution"
 series_ids = [
     "SP500", "DJIA", "NASDAQCOM",
     "VIXCLS", "T10Y2Y", "BAMLH0A0HYM2",
+    "UMCSENT",
     "DEXUSEU", "DEXUSUK", "DEXUSAL", "DEXJPUS",
     "DCOILWTICO", "DCOILBRENTEU",
     "DHHNGSP",
@@ -125,6 +156,8 @@ name = "fred_commodity_monthly"
 kind = "fred_series"
 url = "https://api.stlouisfed.org/fred/series/observations"
 description = "FRED IMF/PPI commodity series (wheat, maize, soybeans, fertilizer index, US PPI mixed fertilizer). Monthly cadence; raw-only (not signaled)."
+license = "mixed-fred"
+redistribute = "with-attribution"
 series_ids = ["PWHEAMTUSDM", "PMAIZMTUSDM", "PSOYBUSDM", "PFERTINDEXM", "WPU0652013A"]
 limit = 60
 purpose = "raw_only"
@@ -134,6 +167,8 @@ name = "fred_crypto_fx"
 kind = "fred_series"
 url = "https://api.stlouisfed.org/fred/series/observations"
 description = "FRED Coinbase crypto reference rates (BTC, ETH, experimental XMR)."
+license = "mixed-fred"
+redistribute = "with-attribution"
 series_ids = ["CBBTCUSD", "CBETHUSD", "CBXMRUSD"]
 limit = 120
 
@@ -142,6 +177,8 @@ name = "eia_petroleum_wpsr_weekly"
 kind = "eia_v2"
 url = "https://api.eia.gov/v2/petroleum/sum/sndw/data"
 description = "EIA weekly petroleum summary: SPR (WCSSTUS1), crude incl. SPR (WCESTUS1), crude + products (WTTSTUS1). Requires EIA_API_KEY."
+license = "PD-USGov"
+redistribute = "public-domain"
 route = "petroleum/sum/sndw"
 frequency = "weekly"
 series_ids = ["WCSSTUS1", "WCESTUS1", "WTTSTUS1"]
@@ -153,6 +190,8 @@ name = "bls_truthbot_watchlist"
 kind = "bls_timeseries"
 url = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
 description = "BLS CPS/CES/CPI-U starter series for TruthBot lookup (unemployment, CPI-U, NFP, LFPR)."
+license = "PD-USGov"
+redistribute = "public-domain"
 series_ids = ["LNS14000000", "CUUR0000SA0", "CES0000000001", "LNS11300000"]
 purpose = "raw_only"
 
@@ -161,6 +200,8 @@ name = "census_acs_state_basic"
 kind = "census_acs"
 url = "https://api.census.gov/data"
 description = "ACS 5-year: population, median household income, poverty universe counts (per state)."
+license = "PD-USGov"
+redistribute = "public-domain"
 dataset = "acs5"
 years = [2022]
 variables = ["B01003_001E", "B19013_001E", "B17001_001E", "B17001_002E"]

@@ -11,6 +11,8 @@ name = "datagov_catalog_climate"
 kind = "ckan_package_search"
 url = "https://catalog.data.gov/api/3/action/package_search?q=climate&rows=50"
 description = "Data.gov catalog CKAN package_search for 'climate' (50 results)."
+license = "per-package"
+redistribute = "per-package"
 purpose = "catalog"
 
 [[sources]]
@@ -18,6 +20,8 @@ name = "hdx_catalog_cholera"
 kind = "ckan_package_search"
 url = "https://data.humdata.org/api/3/action/package_search?q=cholera&rows=50"
 description = "HDX catalog CKAN package_search for 'cholera' (50 results)."
+license = "per-package"
+redistribute = "per-package"
 purpose = "catalog"
 
 [[sources]]
@@ -25,6 +29,8 @@ name = "socrata_example"
 kind = "socrata_soda"
 url = "https://data.cityofnewyork.us/resource/erm2-nwe9.json?$limit=50"
 description = "Socrata SODA example (NYC 311, 50 records)."
+license = "nyc-open-data"
+redistribute = "with-attribution"
 purpose = "catalog"
 
 [[sources]]
@@ -33,4 +39,6 @@ kind = "opendatasoft_explore"
 # Note: this dataset endpoint is confirmed working with the Explore v2.1 API.
 url = "https://public.opendatasoft.com/api/explore/v2.1/catalog/datasets/geonames-all-cities-with-a-population-1000/records?limit=50"
 description = "Opendatasoft Explore API example (geonames cities, 50 records)."
+license = "CC-BY-4.0"
+redistribute = "with-attribution"
 purpose = "catalog"

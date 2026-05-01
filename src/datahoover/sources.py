@@ -21,27 +21,80 @@ SIGNAL_THRESHOLD_DEFAULTS: Dict[str, Dict[str, Any]] = {
 }
 
 
+# Allowed values for the `license` field on a [[sources]] block. SPDX-style IDs
+# where one exists; otherwise a `proprietary-<vendor>` or `mixed-<provider>`
+# tag. `per-package` means the licence is encoded on each ingested record (e.g.
+# CKAN catalogs whose member datasets each carry their own licence).
+LICENSE_TAGS: frozenset[str] = frozenset(
+    {
+        "PD-USGov",
+        "CC0-1.0",
+        "CC-BY-4.0",
+        "CC-BY-SA-4.0",
+        "CC-BY-NC-4.0",
+        "CC-BY-NC-SA-4.0",
+        "ODC-BY-1.0",
+        "ODbL-1.0",
+        "eu-commission-reuse",
+        "nyc-open-data",
+        "mixed-fred",
+        "proprietary-twelvedata",
+        "proprietary-gdacs",
+        "proprietary-caida",
+        "per-package",
+    }
+)
+
+# Allowed values for the `redistribute` field. Operational answer to "can the
+# raw rows or signals derived from them be republished?".
+#   public-domain   — no restrictions.
+#   with-attribution — CC-BY-style: republish freely if you attribute.
+#   share-alike     — CC-BY-SA / ODbL: derived data inherits the licence.
+#   non-commercial  — CC-BY-NC / CC-BY-NC-SA: not for commercial products.
+#   display-only    — vendor permits showing values to users but not bulk
+#                     redistribution of the raw series (e.g. Twelve Data).
+#   per-package     — depends on the underlying record (CKAN catalogs).
+#   no              — explicit prohibition; ingest for internal use only.
+REDISTRIBUTE_TAGS: frozenset[str] = frozenset(
+    {
+        "public-domain",
+        "with-attribution",
+        "share-alike",
+        "non-commercial",
+        "display-only",
+        "per-package",
+        "no",
+    }
+)
+
+
 @dataclass(frozen=True)
 class Source:
     name: str
     kind: str
     url: str
     description: str | None = None
+    license: str | None = None
+    redistribute: str | None = None
     extra: Dict[str, any] | None = None
 
 
 CATALOGS_FILENAME = "catalogs.toml"
 
+_RESERVED_KEYS = {"name", "kind", "url", "description", "license", "redistribute"}
+
 
 def _parse_source_blocks(raw_blocks: List[dict]) -> Dict[str, Source]:
     out: Dict[str, Source] = {}
     for s in raw_blocks:
-        extra = {k: v for k, v in s.items() if k not in {"name", "kind", "url", "description"}}
+        extra = {k: v for k, v in s.items() if k not in _RESERVED_KEYS}
         src = Source(
             name=s["name"],
             kind=s["kind"],
             url=s.get("url", ""),
             description=s.get("description"),
+            license=s.get("license"),
+            redistribute=s.get("redistribute"),
             extra=extra if extra else None,
         )
         out[src.name] = src

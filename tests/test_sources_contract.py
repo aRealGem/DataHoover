@@ -9,6 +9,7 @@ except ImportError:  # pragma: no cover
     import tomli as tomllib
 
 from datahoover.signals import PRODUCER_SOURCES, PRODUCERS
+from datahoover.sources import LICENSE_TAGS, REDISTRIBUTE_TAGS
 
 ALLOWED_PURPOSES = {"catalog", "raw_only"}
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -56,3 +57,30 @@ def test_producer_sources_keys_match_registry():
         f"PRODUCER_SOURCES keys {sorted(PRODUCER_SOURCES)} "
         f"must match registered producers {sorted(registered)}"
     )
+
+
+def test_every_source_declares_license_and_redistribute():
+    """Every [[sources]] block must declare both `license` and `redistribute` so
+    downstream consumers can mechanically partition raw rows / signals into a
+    commercial-safe lane vs. a personal/research-only lane. See docs/licensing.md.
+    """
+    violations: list[str] = []
+    for src in _load_sources_blocks():
+        name = src["name"]
+        license_tag = src.get("license")
+        redistribute_tag = src.get("redistribute")
+        if license_tag is None:
+            violations.append(f"{name!r}: missing `license`")
+        elif license_tag not in LICENSE_TAGS:
+            violations.append(
+                f"{name!r}: license={license_tag!r} not in LICENSE_TAGS "
+                f"({sorted(LICENSE_TAGS)})"
+            )
+        if redistribute_tag is None:
+            violations.append(f"{name!r}: missing `redistribute`")
+        elif redistribute_tag not in REDISTRIBUTE_TAGS:
+            violations.append(
+                f"{name!r}: redistribute={redistribute_tag!r} not in REDISTRIBUTE_TAGS "
+                f"({sorted(REDISTRIBUTE_TAGS)})"
+            )
+    assert not violations, "\n".join(violations)
