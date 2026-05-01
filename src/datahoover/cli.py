@@ -24,6 +24,8 @@ from .connectors.fred_series import ingest_fred_series
 from .connectors.eia_v2 import ingest_eia_v2
 from .connectors.bls_timeseries import ingest_bls_timeseries
 from .connectors.census_acs import ingest_census_acs
+from .connectors.alternative_me_fng import ingest_alternative_me_fng
+from .connectors.cnn_fear_greed import ingest_cnn_fear_greed
 from .storage.duckdb_store import show_latest
 from .signals import compute_signals, alert_signals
 from .snapshot import snapshot_zip, snapshot_parquet, default_snapshot_stamp
@@ -157,6 +159,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_census.add_argument("--source", type=str, default="census_acs_state_basic", help="Source name from sources.toml")
     p_census.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
     p_census.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+
+    p_alt_fng = sub.add_parser("ingest-altme-fng", help="Ingest Alternative.me Crypto Fear & Greed Index into DuckDB")
+    p_alt_fng.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
+    p_alt_fng.add_argument("--source", type=str, default="alternative_me_fng_daily", help="Source name from sources.toml")
+    p_alt_fng.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
+    p_alt_fng.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+
+    p_cnn_fg = sub.add_parser("ingest-cnn-fg", help="Ingest CNN Fear & Greed Index into DuckDB")
+    p_cnn_fg.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
+    p_cnn_fg.add_argument("--source", type=str, default="cnn_fear_greed_daily", help="Source name from sources.toml")
+    p_cnn_fg.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
+    p_cnn_fg.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
 
     p_signals = sub.add_parser("compute-signals", help="Compute derived signals from ingested data")
     p_signals.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
@@ -360,6 +374,24 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "ingest-census":
         ingest_census_acs(
+            config_path=args.config,
+            source_name=args.source,
+            data_dir=args.data_dir,
+            db_path=args.db,
+        )
+        return 0
+
+    if args.cmd == "ingest-altme-fng":
+        ingest_alternative_me_fng(
+            config_path=args.config,
+            source_name=args.source,
+            data_dir=args.data_dir,
+            db_path=args.db,
+        )
+        return 0
+
+    if args.cmd == "ingest-cnn-fg":
+        ingest_cnn_fear_greed(
             config_path=args.config,
             source_name=args.source,
             data_dir=args.data_dir,

@@ -380,6 +380,33 @@ def init_db(db_path: Path) -> None:
             );
             """
         )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS alternative_me_fng (
+              source           VARCHAR,
+              observation_date DATE,
+              ts_utc           TIMESTAMP,
+              value            INTEGER,
+              classification   VARCHAR,
+              ingested_at      TIMESTAMP,
+              raw_path         VARCHAR
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cnn_fear_greed (
+              source           VARCHAR,
+              component        VARCHAR,
+              observation_date DATE,
+              ts_utc           TIMESTAMP,
+              score            DOUBLE,
+              rating           VARCHAR,
+              ingested_at      TIMESTAMP,
+              raw_path         VARCHAR
+            );
+            """
+        )
         # Create indexes for performance
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_signal_id ON signals(signal_id);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_severity ON signals(severity_score DESC, computed_at DESC);")
@@ -399,6 +426,12 @@ def init_db(db_path: Path) -> None:
         )
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_eia_v2_obs_key ON eia_v2_observations(source, series_id, period);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alt_me_fng_key ON alternative_me_fng(source, observation_date);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cnn_fg_key ON cnn_fear_greed(source, component, ts_utc);"
         )
     finally:
         con.close()
@@ -1041,6 +1074,73 @@ def upsert_eia_v2_observations(db_path: Path, rows: list[dict]) -> int:
                     r["period"],
                     r.get("value"),
                     r.get("units"),
+                    r.get("ingested_at"),
+                    r.get("raw_path"),
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_alternative_me_fng(db_path: Path, rows: list[dict]) -> int:
+    """Upsert Alternative.me Fear & Greed rows keyed by source and observation_date."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                """
+                DELETE FROM alternative_me_fng
+                WHERE source = ? AND observation_date IS NOT DISTINCT FROM ?
+                """,
+                [r["source"], r.get("observation_date")],
+            )
+            con.execute(
+                """
+                INSERT INTO alternative_me_fng VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r.get("observation_date"),
+                    r.get("ts_utc"),
+                    r.get("value"),
+                    r.get("classification"),
+                    r.get("ingested_at"),
+                    r.get("raw_path"),
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_cnn_fear_greed(db_path: Path, rows: list[dict]) -> int:
+    """Upsert CNN Fear & Greed rows keyed by source, component, and ts_utc."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                """
+                DELETE FROM cnn_fear_greed
+                WHERE source = ? AND component = ? AND ts_utc IS NOT DISTINCT FROM ?
+                """,
+                [r["source"], r["component"], r.get("ts_utc")],
+            )
+            con.execute(
+                """
+                INSERT INTO cnn_fear_greed VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["component"],
+                    r.get("observation_date"),
+                    r.get("ts_utc"),
+                    r.get("score"),
+                    r.get("rating"),
                     r.get("ingested_at"),
                     r.get("raw_path"),
                 ],

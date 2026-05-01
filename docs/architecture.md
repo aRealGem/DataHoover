@@ -267,12 +267,13 @@ These have connectors and tables in [`duckdb_store.py`](../src/datahoover/storag
 
 | Category | File | Source names |
 |----------|------|--------------|
-| Macro & markets (extra / unsignaled) | `sources.toml` | `eurostat_gdp`, `worldbank_gdp_usa` |
+| Macro & markets (extra / unsignaled) | `sources.toml` | `eurostat_gdp`, `worldbank_gdp_usa`, `fred_sentiment_indicators` |
+| Sentiment indices (Tier 1, raw-only until producer wired) | `sources.toml` | `alternative_me_fng_daily`, `cnn_fear_greed_daily` |
 | Catalog / discovery | `catalogs.toml` | `datagov_catalog_climate`, `hdx_catalog_cholera`, `socrata_example`, `opendatasoft_example` |
 | News | `sources.toml` | `gdelt_democracy_24h` |
 | Network measurement | `sources.toml` | `ripe_atlas_probes` |
 
-That is **7** dark sources vs **12** source rows that feed the eight pipelines above (`ripe_ris_live_10s` enriches IODA but is not an independent signal). The merged view across `sources.toml` (16 blocks) and `catalogs.toml` (4 blocks) still totals 20.
+The Tier 1 sentiment-index sources land in dedicated DuckDB tables (`alternative_me_fng`, `cnn_fear_greed`) and a shared `fred_series_observations` table. They are pre-computed sentiment scores (0–100), so a future `_sentiment_regime_signals` producer can fire on threshold crossings (Greed → Fear, etc.) without any NLP work. See [`docs/licensing.md`](licensing.md) for the redistribution lane each source falls into.
 
 ### Catalog split
 

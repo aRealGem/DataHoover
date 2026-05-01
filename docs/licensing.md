@@ -68,6 +68,9 @@ few entries below are conservative interpretations of ambiguous wording
 | `eia_petroleum_wpsr_weekly` | `PD-USGov` | `public-domain` | DOE / EIA. |
 | `bls_truthbot_watchlist` | `PD-USGov` | `public-domain` | BLS. |
 | `census_acs_state_basic` | `PD-USGov` | `public-domain` | Census. |
+| `fred_sentiment_indicators` | `mixed-fred` | `with-attribution` | STLFSI4 (St. Louis Fed Financial Stress), NFCI (Chicago Fed National Financial Conditions), CSCICP03USM665S (OECD US Consumer Confidence), BSCICP03USM665S (OECD US Business Confidence), CIVPART (BLS Labor Force Participation). All ultimately PD US gov't or attribution-friendly OECD; safe for the commercial lane with attribution. |
+| `alternative_me_fng_daily` | `proprietary-altme` | `with-attribution` | Alternative.me publishes the index publicly without explicit redistribution terms. **Verify** before commercial use; treat as attribution-required. |
+| `cnn_fear_greed_daily` | `proprietary-cnn` | `non-commercial` | Backing endpoint for CNN's public dataviz; no published reuse terms. **Treat as personal/research-only**. |
 | `datagov_catalog_climate` | `per-package` | `per-package` | Catalog metadata; each member dataset has its own licence (use the `license_id` column on `ckan_packages`). |
 | `hdx_catalog_cholera` | `per-package` | `per-package` | OCHA HDX; mostly CC-BY-IGO 4.0 but verify per-package. |
 | `socrata_example` | `nyc-open-data` | `with-attribution` | NYC Open Data Terms of Use. |

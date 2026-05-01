@@ -41,6 +41,8 @@ LICENSE_TAGS: frozenset[str] = frozenset(
         "proprietary-twelvedata",
         "proprietary-gdacs",
         "proprietary-caida",
+        "proprietary-altme",
+        "proprietary-cnn",
         "per-package",
     }
 )

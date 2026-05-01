@@ -173,6 +173,23 @@ series_ids = ["CBBTCUSD", "CBETHUSD", "CBXMRUSD"]
 limit = 120
 
 [[sources]]
+name = "fred_sentiment_indicators"
+kind = "fred_series"
+url = "https://api.stlouisfed.org/fred/series/observations"
+description = "FRED sentiment / financial-conditions / risk-appetite indicators (St. Louis + Chicago Fed stress indices, OECD US consumer/business confidence, labor force participation). All PD or attribution-only at the FRED level; commercial-safe lane."
+license = "mixed-fred"
+redistribute = "with-attribution"
+series_ids = [
+    "STLFSI4",
+    "NFCI",
+    "CSCICP03USM665S",
+    "BSCICP03USM665S",
+    "CIVPART",
+]
+limit = 240
+purpose = "raw_only"
+
+[[sources]]
 name = "eia_petroleum_wpsr_weekly"
 kind = "eia_v2"
 url = "https://api.eia.gov/v2/petroleum/sum/sndw/data"
@@ -206,6 +223,25 @@ dataset = "acs5"
 years = [2022]
 variables = ["B01003_001E", "B19013_001E", "B17001_001E", "B17001_002E"]
 geo_for = "state:*"
+purpose = "raw_only"
+
+[[sources]]
+name = "alternative_me_fng_daily"
+kind = "alternative_me_fng"
+url = "https://api.alternative.me/fng/"
+description = "Alternative.me Crypto Fear & Greed Index (daily 0-100 score with classification). No auth; full history available with limit=0."
+license = "proprietary-altme"
+redistribute = "with-attribution"
+limit = 0
+purpose = "raw_only"
+
+[[sources]]
+name = "cnn_fear_greed_daily"
+kind = "cnn_fear_greed"
+url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+description = "CNN Fear & Greed Index (composite + 7 sub-components, current snapshot + ~3y of historical daily values). Unauthenticated public dataviz endpoint; treat as personal/research use only."
+license = "proprietary-cnn"
+redistribute = "non-commercial"
 purpose = "raw_only"
 
 # --------------------------------------------------------------------------- #
