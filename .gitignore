@@ -16,6 +16,7 @@ data/*.duckdb
 data/snapshots/
 data/dashboard/
 data/exports/
+data/published/
 
 # OS / editor
 .DS_Store

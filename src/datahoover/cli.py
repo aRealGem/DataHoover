@@ -29,6 +29,7 @@ from .connectors.cnn_fear_greed import ingest_cnn_fear_greed
 from .storage.duckdb_store import show_latest
 from .signals import compute_signals, alert_signals
 from .snapshot import snapshot_zip, snapshot_parquet, default_snapshot_stamp
+from .publish import main as publish_main
 
 
 DEFAULT_CONFIG = Path("sources.toml")
@@ -199,6 +200,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw = sys.argv[1:] if argv is None else list(argv)
+    if raw and raw[0] == "publish":
+        return publish_main(raw[1:])
+
     args = build_parser().parse_args(argv)
 
     if args.cmd == "ingest-usgs":

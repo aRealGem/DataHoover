@@ -1,0 +1,30 @@
+# Publication manifest — declares which Cursor canvases the publish pipeline
+# (`hoover publish`) renders to PDF and uploads to ExpressionPi.
+#
+# Each entry binds a `.canvas.tsx` file to the DataHoover `[[sources]]` it
+# draws from, so the publish pipeline can compute the worst-case redistribute
+# lane (commercial-safe vs personal-use) and an attribution footer for each
+# publication.
+#
+# `canvas` is resolved relative to --canvases-dir (default:
+# ~/.cursor/projects/<dashed-repo-path>/canvases/).  Source names must match
+# `[[sources]]` blocks in sources.toml or catalogs.toml — they are validated
+# at publish time.
+
+[[publications]]
+name = "sharp-runup-bull-market-signal"
+canvas = "sharp-runup-bull-market-signal.canvas.tsx"
+title = "Sharp run-up: bull market signal"
+summary = "Equity breadth and macro indicators flagging a sustained advance."
+sources = ["twelvedata_watchlist_daily", "fred_macro_watchlist"]
+
+[[publications]]
+name = "iran-war-market-impact"
+canvas = "iran-war-market-impact.canvas.tsx"
+title = "Iran war: market impact"
+summary = "Equity, FX, and energy reactions to Mideast escalation."
+sources = [
+    "twelvedata_watchlist_daily",
+    "fred_macro_watchlist",
+    "eia_petroleum_wpsr_weekly",
+]

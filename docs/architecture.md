@@ -278,3 +278,23 @@ The Tier 1 sentiment-index sources land in dedicated DuckDB tables (`alternative
 ### Catalog split
 
 Catalog sources describe dataset-search endpoints (CKAN `package_search`, Socrata SODA discovery, Opendatasoft Explore catalog) rather than substantive data feeds. They live in `catalogs.toml`; [`load_sources`](../src/datahoover/sources.py) transparently merges any sibling `catalogs.toml` at load time, so `hoover ingest-ckan` / `ingest-socrata` / `ingest-opendatasoft` keep finding the same names without any new CLI surface.
+
+## Publishing pipeline
+
+The `hoover publish` subcommand turns Cursor `.canvas.tsx` dashboards into a public artifact bundle on [ExpressionPi](http://expressionpi.home.arpa). It is a separate downstream pipeline from ingest/signals — the warehouse data is its prerequisite, not its concern.
+
+```mermaid
+flowchart LR
+  pubs["publications.toml"] --> publish["datahoover.publish.run_publish"]
+  srcs["sources.toml + catalogs.toml"] --> publish
+  canvases["Cursor .canvas.tsx files"] --> canvasPdf["scripts/canvas-pdf"]
+  publish --> canvasPdf
+  canvasPdf --> pdfs["data/published/&lt;DATE&gt;/*.pdf"]
+  publish --> lane["datahoover.lane (worst-case redistribute)"]
+  lane --> indexHtml["data/published/index.html"]
+  pdfs --> rsync["rsync -av --delete"]
+  indexHtml --> rsync
+  rsync --> pi["expressionpi.home.arpa peer site beside DokuWiki"]
+```
+
+[`publications.toml`](../publications.toml) declares which canvases to render and which `[[sources]]` each draws from. [`datahoover.lane`](../src/datahoover/lane.py) takes the worst-case `redistribute` tag across those sources to bucket each publication into the `commercial-safe` or `personal-use` lane. [`docs/publishing.md`](publishing.md) covers the full operational details (transport, lane semantics, exit codes, prerequisites).
