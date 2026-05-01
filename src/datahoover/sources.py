@@ -44,6 +44,8 @@ LICENSE_TAGS: frozenset[str] = frozenset(
         "proprietary-caida",
         "proprietary-altme",
         "proprietary-cnn",
+        "proprietary-reddit",
+        "proprietary-stocktwits",
         "per-package",
     }
 )

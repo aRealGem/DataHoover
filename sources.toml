@@ -251,6 +251,39 @@ license = "proprietary-cnn"
 redistribute = "non-commercial"
 purpose = "raw_only"
 
+[[sources]]
+name = "reddit_sentiment_subs"
+kind = "reddit_subreddit_json"
+url = "https://www.reddit.com"
+description = "Reddit /new listings for finance / crypto / political-mood subreddits. Reddit ToS allows display but restricts redistribution; raw posts are personal/research lane. Default listing=new, limit=100 per sub, 1s throttle between subs."
+license = "proprietary-reddit"
+redistribute = "display-only"
+subreddits = ["wallstreetbets", "cryptocurrency", "Bitcoin", "stocks", "economy", "politics"]
+listing = "new"
+limit = 100
+min_interval_seconds = 1.0
+purpose = "raw_only"
+
+[[sources]]
+name = "stocktwits_watchlist"
+kind = "stocktwits_symbol_stream"
+url = "https://api.stocktwits.com"
+description = "StockTwits public symbol stream for the core watchlist (SPY/QQQ/GLD + BTC.X/ETH.X). Each message can carry user-tagged Bullish/Bearish sentiment — one of the few free pre-labeled sentiment feeds. ToS allows display with attribution; raw redistribution restricted."
+license = "proprietary-stocktwits"
+redistribute = "display-only"
+symbols = ["SPY", "QQQ", "DIA", "IWM", "GLD", "BTC.X", "ETH.X"]
+min_interval_seconds = 1.5
+purpose = "raw_only"
+
+[[sources]]
+name = "fed_press_releases_rss"
+kind = "generic_rss"
+url = "https://www.federalreserve.gov/feeds/press_all.xml"
+description = "Federal Reserve all-press-releases RSS (FOMC statements, monetary policy, supervision). PD-USGov; commercial-safe lane. Example demonstrating the generic_rss connector."
+license = "PD-USGov"
+redistribute = "public-domain"
+purpose = "raw_only"
+
 # --------------------------------------------------------------------------- #
 # Signal producer thresholds. Keys not present here fall back to the defaults
 # in `SIGNAL_THRESHOLD_DEFAULTS` in `src/datahoover/sources.py`.

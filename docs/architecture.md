@@ -279,6 +279,8 @@ These have connectors and tables in [`duckdb_store.py`](../src/datahoover/storag
 |----------|------|--------------|
 | Macro & markets (extra / unsignaled) | `sources.toml` | `eurostat_gdp`, `worldbank_gdp_usa`, `fred_sentiment_indicators` |
 | Sentiment indices (Tier 1, raw-only until producer wired) | `sources.toml` | `alternative_me_fng_daily`, `cnn_fear_greed_daily` |
+| Raw text feeds (Tier 2, raw-only — personal/research lane) | `sources.toml` | `reddit_sentiment_subs`, `stocktwits_watchlist` |
+| Generic news / publisher RSS | `sources.toml` | `fed_press_releases_rss` |
 | Catalog / discovery | `catalogs.toml` | `datagov_catalog_climate`, `hdx_catalog_cholera`, `socrata_example`, `opendatasoft_example` |
 | Network measurement | `sources.toml` | `ripe_atlas_probes` |
 

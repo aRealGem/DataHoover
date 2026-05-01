@@ -429,6 +429,68 @@ def init_db(db_path: Path) -> None:
             );
             """
         )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reddit_posts (
+              source        VARCHAR,
+              subreddit     VARCHAR,
+              post_id       VARCHAR,
+              reddit_id     VARCHAR,
+              title         VARCHAR,
+              selftext      VARCHAR,
+              author        VARCHAR,
+              score         INTEGER,
+              num_comments  INTEGER,
+              upvote_ratio  DOUBLE,
+              created_utc   TIMESTAMP,
+              permalink     VARCHAR,
+              url           VARCHAR,
+              domain        VARCHAR,
+              flair         VARCHAR,
+              is_self       BOOLEAN,
+              over_18       BOOLEAN,
+              raw_json      VARCHAR,
+              raw_path      VARCHAR,
+              ingested_at   TIMESTAMP
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stocktwits_messages (
+              source        VARCHAR,
+              symbol        VARCHAR,
+              message_id    BIGINT,
+              body          VARCHAR,
+              user_id       INTEGER,
+              user_username VARCHAR,
+              sentiment     VARCHAR,
+              created_at    TIMESTAMP,
+              likes         INTEGER,
+              replies       INTEGER,
+              symbols_json  VARCHAR,
+              raw_json      VARCHAR,
+              raw_path      VARCHAR,
+              ingested_at   TIMESTAMP
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rss_items (
+              source        VARCHAR,
+              feed_url      VARCHAR,
+              guid          VARCHAR,
+              title         VARCHAR,
+              link          VARCHAR,
+              summary       VARCHAR,
+              author        VARCHAR,
+              published_at  TIMESTAMP,
+              raw_xml_path  VARCHAR,
+              ingested_at   TIMESTAMP
+            );
+            """
+        )
         # Create indexes for performance
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_signal_id ON signals(signal_id);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_severity ON signals(severity_score DESC, computed_at DESC);")
@@ -460,6 +522,24 @@ def init_db(db_path: Path) -> None:
         )
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_gdelt_gkg_query ON gdelt_gkg(source, v21_date DESC);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reddit_posts_key ON reddit_posts(source, post_id);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reddit_posts_query ON reddit_posts(source, subreddit, created_utc DESC);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_stocktwits_msg_key ON stocktwits_messages(source, symbol, message_id);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_stocktwits_msg_query ON stocktwits_messages(source, symbol, created_at DESC);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rss_items_key ON rss_items(source, guid);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rss_items_query ON rss_items(source, published_at DESC);"
         )
     finally:
         con.close()
@@ -1171,6 +1251,124 @@ def upsert_cnn_fear_greed(db_path: Path, rows: list[dict]) -> int:
                     r.get("rating"),
                     r.get("ingested_at"),
                     r.get("raw_path"),
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_reddit_posts(db_path: Path, rows: list[dict]) -> int:
+    """Upsert Reddit posts keyed by (source, post_id)."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM reddit_posts WHERE source = ? AND post_id = ?",
+                [r["source"], r["post_id"]],
+            )
+            con.execute(
+                """
+                INSERT INTO reddit_posts VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r.get("subreddit"),
+                    r["post_id"],
+                    r.get("reddit_id"),
+                    r.get("title"),
+                    r.get("selftext"),
+                    r.get("author"),
+                    r.get("score"),
+                    r.get("num_comments"),
+                    r.get("upvote_ratio"),
+                    r.get("created_utc"),
+                    r.get("permalink"),
+                    r.get("url"),
+                    r.get("domain"),
+                    r.get("flair"),
+                    r.get("is_self"),
+                    r.get("over_18"),
+                    r.get("raw_json"),
+                    r.get("raw_path"),
+                    r.get("ingested_at"),
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_stocktwits_messages(db_path: Path, rows: list[dict]) -> int:
+    """Upsert StockTwits messages keyed by (source, symbol, message_id)."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                """
+                DELETE FROM stocktwits_messages
+                WHERE source = ? AND symbol = ? AND message_id = ?
+                """,
+                [r["source"], r["symbol"], r["message_id"]],
+            )
+            con.execute(
+                """
+                INSERT INTO stocktwits_messages VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r["symbol"],
+                    r["message_id"],
+                    r.get("body"),
+                    r.get("user_id"),
+                    r.get("user_username"),
+                    r.get("sentiment"),
+                    r.get("created_at"),
+                    r.get("likes"),
+                    r.get("replies"),
+                    r.get("symbols_json"),
+                    r.get("raw_json"),
+                    r.get("raw_path"),
+                    r.get("ingested_at"),
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_rss_items(db_path: Path, rows: list[dict]) -> int:
+    """Upsert generic RSS / Atom items keyed by (source, guid)."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM rss_items WHERE source = ? AND guid = ?",
+                [r["source"], r["guid"]],
+            )
+            con.execute(
+                """
+                INSERT INTO rss_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r.get("feed_url"),
+                    r["guid"],
+                    r.get("title"),
+                    r.get("link"),
+                    r.get("summary"),
+                    r.get("author"),
+                    r.get("published_at"),
+                    r.get("raw_xml_path"),
+                    r.get("ingested_at"),
                 ],
             )
             inserted += 1

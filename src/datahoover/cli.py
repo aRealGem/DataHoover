@@ -27,6 +27,9 @@ from .connectors.bls_timeseries import ingest_bls_timeseries
 from .connectors.census_acs import ingest_census_acs
 from .connectors.alternative_me_fng import ingest_alternative_me_fng
 from .connectors.cnn_fear_greed import ingest_cnn_fear_greed
+from .connectors.reddit_subreddit import ingest_reddit_subreddit_json
+from .connectors.stocktwits_symbol import ingest_stocktwits_symbol_stream
+from .connectors.generic_rss import ingest_generic_rss
 from .storage.duckdb_store import show_latest
 from .signals import compute_signals, alert_signals
 from .snapshot import snapshot_zip, snapshot_parquet, default_snapshot_stamp
@@ -178,6 +181,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_cnn_fg.add_argument("--source", type=str, default="cnn_fear_greed_daily", help="Source name from sources.toml")
     p_cnn_fg.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
     p_cnn_fg.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+
+    p_reddit = sub.add_parser("ingest-reddit", help="Ingest Reddit subreddit /new listings into DuckDB")
+    p_reddit.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
+    p_reddit.add_argument("--source", type=str, default="reddit_sentiment_subs", help="Source name from sources.toml")
+    p_reddit.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
+    p_reddit.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+
+    p_st = sub.add_parser("ingest-stocktwits", help="Ingest StockTwits public symbol streams into DuckDB")
+    p_st.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
+    p_st.add_argument("--source", type=str, default="stocktwits_watchlist", help="Source name from sources.toml")
+    p_st.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
+    p_st.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+
+    p_rss = sub.add_parser("ingest-rss", help="Ingest a generic RSS 2.0 / Atom feed into DuckDB (rss_items table)")
+    p_rss.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
+    p_rss.add_argument("--source", type=str, required=True, help="Source name from sources.toml (kind=generic_rss)")
+    p_rss.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
+    p_rss.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
 
     p_signals = sub.add_parser("compute-signals", help="Compute derived signals from ingested data")
     p_signals.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
@@ -408,6 +429,33 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "ingest-cnn-fg":
         ingest_cnn_fear_greed(
+            config_path=args.config,
+            source_name=args.source,
+            data_dir=args.data_dir,
+            db_path=args.db,
+        )
+        return 0
+
+    if args.cmd == "ingest-reddit":
+        ingest_reddit_subreddit_json(
+            config_path=args.config,
+            source_name=args.source,
+            data_dir=args.data_dir,
+            db_path=args.db,
+        )
+        return 0
+
+    if args.cmd == "ingest-stocktwits":
+        ingest_stocktwits_symbol_stream(
+            config_path=args.config,
+            source_name=args.source,
+            data_dir=args.data_dir,
+            db_path=args.db,
+        )
+        return 0
+
+    if args.cmd == "ingest-rss":
+        ingest_generic_rss(
             config_path=args.config,
             source_name=args.source,
             data_dir=args.data_dir,
