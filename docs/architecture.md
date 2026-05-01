@@ -219,6 +219,15 @@ Each pipeline is: one or more raw sources → one producer function → rows in 
 
 - `openfema_disaster_declarations` — OpenFEMA disaster declarations summary.
 
+### 9. GDELT sentiment tone → `_gdelt_tone_signals` (`signal_type`: `sentiment_tone`)
+
+*Aggregates per-source article tones from `gdelt_docs` (doc-API average tone, single-numeric or comma-tuple) and `gdelt_gkg` (V2Tone first value) over the lookback window. Emits one signal per `(source, window)` when at least `min_articles` parseable rows exist and the absolute average tone is at least `min_abs_avg_tone`. Severity = `min(1.0, |avg_tone| / severity_denominator)`. Defaults: `min_articles=5`, `min_abs_avg_tone=1.0`, `severity_denominator=5.0`. `entity_type = "gdelt_topic"`, `entity_id = source_name` (e.g. `gdelt_democracy_24h`).*
+
+**Lane:** non-commercial only — both feeding sources are CC-BY-NC-SA 4.0 (see `docs/licensing.md`). Signals derived from this producer must not be included in any commercial output.
+
+- `gdelt_democracy_24h` — GDELT 2.0 doc API, `query=democracy`, last 24h.
+- `gdelt_gkg_15min` — GDELT 2.0 GKG latest 15-min CSV drop (V2Tone, V2Themes, V2Persons/Locations/Organizations stashed in `raw_row_json` for later re-parsing). High volume (~50–150 MB unzipped per drop).
+
 ## Producer registry
 
 `compute_signals` iterates `signals.PRODUCERS`, a module-level ordered list of `(name, adapter)` pairs. Each adapter has the uniform signature `(con, *, cutoff, computed_at, **config) -> list[SignalRow]` and delegates to the underlying producer function. New producers append to this list in commit order.
@@ -237,6 +246,7 @@ Hardcoded thresholds are declared as defaults in `SIGNAL_THRESHOLD_DEFAULTS` (se
 | `gdacs` | `min_severity = 0.6` |
 | `ooni` | `min_total = 10`, `min_current_ratio = 0.5`, `min_ratio_delta = 0.3` |
 | `market_move` | `min_abs_return = 0.02`, `severity_denominator = 0.10` |
+| `sentiment_tone` | `min_articles = 5`, `min_abs_avg_tone = 1.0`, `severity_denominator = 5.0` |
 
 Precedence (highest wins): `[signals.<type>]` in `sources.toml` → legacy `--usgs-min-mag` / `--gdacs-min-severity` CLI flags → hardcoded defaults. Because the TOML ships with the same numeric values as the pre-refactor defaults, output is byte-identical at the default settings.
 
@@ -270,8 +280,9 @@ These have connectors and tables in [`duckdb_store.py`](../src/datahoover/storag
 | Macro & markets (extra / unsignaled) | `sources.toml` | `eurostat_gdp`, `worldbank_gdp_usa`, `fred_sentiment_indicators` |
 | Sentiment indices (Tier 1, raw-only until producer wired) | `sources.toml` | `alternative_me_fng_daily`, `cnn_fear_greed_daily` |
 | Catalog / discovery | `catalogs.toml` | `datagov_catalog_climate`, `hdx_catalog_cholera`, `socrata_example`, `opendatasoft_example` |
-| News | `sources.toml` | `gdelt_democracy_24h` |
 | Network measurement | `sources.toml` | `ripe_atlas_probes` |
+
+`gdelt_democracy_24h` was previously listed as dark (News). It now feeds `_gdelt_tone_signals` (pipeline #9), alongside the new `gdelt_gkg_15min` source. Both are non-commercial-lane only.
 
 The Tier 1 sentiment-index sources land in dedicated DuckDB tables (`alternative_me_fng`, `cnn_fear_greed`) and a shared `fred_series_observations` table. They are pre-computed sentiment scores (0–100), so a future `_sentiment_regime_signals` producer can fire on threshold crossings (Greed → Fear, etc.) without any NLP work. See [`docs/licensing.md`](licensing.md) for the redistribution lane each source falls into.
 

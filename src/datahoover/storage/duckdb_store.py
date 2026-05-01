@@ -407,6 +407,28 @@ def init_db(db_path: Path) -> None:
             );
             """
         )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS gdelt_gkg (
+              source             VARCHAR,
+              feed_url           VARCHAR,
+              gkg_record_id      VARCHAR,
+              v21_date           TIMESTAMP,
+              source_collection  VARCHAR,
+              source_common_name VARCHAR,
+              document_url       VARCHAR,
+              v2_themes          VARCHAR,
+              v2_tone            VARCHAR,
+              v2_tone_avg        DOUBLE,
+              v2_tone_pos        DOUBLE,
+              v2_tone_neg        DOUBLE,
+              v2_tone_polarity   DOUBLE,
+              v2_word_count      INTEGER,
+              raw_row_json       VARCHAR,
+              ingested_at        TIMESTAMP
+            );
+            """
+        )
         # Create indexes for performance
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_signal_id ON signals(signal_id);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_severity ON signals(severity_score DESC, computed_at DESC);")
@@ -432,6 +454,12 @@ def init_db(db_path: Path) -> None:
         )
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_cnn_fg_key ON cnn_fear_greed(source, component, ts_utc);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_gdelt_gkg_key ON gdelt_gkg(source, gkg_record_id);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_gdelt_gkg_query ON gdelt_gkg(source, v21_date DESC);"
         )
     finally:
         con.close()
@@ -1143,6 +1171,46 @@ def upsert_cnn_fear_greed(db_path: Path, rows: list[dict]) -> int:
                     r.get("rating"),
                     r.get("ingested_at"),
                     r.get("raw_path"),
+                ],
+            )
+            inserted += 1
+    finally:
+        con.close()
+    return inserted
+
+
+def upsert_gdelt_gkg(db_path: Path, rows: list[dict]) -> int:
+    """Upsert GDELT GKG rows keyed by (source, gkg_record_id)."""
+    con = duckdb.connect(str(db_path))
+    inserted = 0
+    try:
+        for r in rows:
+            con.execute(
+                "DELETE FROM gdelt_gkg WHERE source = ? AND gkg_record_id = ?",
+                [r["source"], r["gkg_record_id"]],
+            )
+            con.execute(
+                """
+                INSERT INTO gdelt_gkg VALUES
+                  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r["source"],
+                    r.get("feed_url"),
+                    r["gkg_record_id"],
+                    r.get("v21_date"),
+                    r.get("source_collection"),
+                    r.get("source_common_name"),
+                    r.get("document_url"),
+                    r.get("v2_themes"),
+                    r.get("v2_tone"),
+                    r.get("v2_tone_avg"),
+                    r.get("v2_tone_pos"),
+                    r.get("v2_tone_neg"),
+                    r.get("v2_tone_polarity"),
+                    r.get("v2_word_count"),
+                    r.get("raw_row_json"),
+                    r.get("ingested_at"),
                 ],
             )
             inserted += 1

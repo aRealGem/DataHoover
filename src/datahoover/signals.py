@@ -841,6 +841,146 @@ def _disaster_declaration_signals(
     return signals
 
 
+def _parse_tone_first_value(raw: Any) -> Optional[float]:
+    """Parse a GDELT `tone` field which may be a single numeric or a comma-list.
+
+    The GDELT 2.0 doc API returns a single number per article when `mode=artlist`,
+    but the GKG fields and some other modes use a 6-7-tuple (tone, pos, neg,
+    polarity, ...). Either way, the first comma-separated value is the average
+    tone (-100 to +100 range, but typically clusters around -10..+10 for
+    article-level data).
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if isinstance(raw, str):
+        head = raw.split(",", 1)[0].strip()
+        return _as_float(head)
+    return _as_float(raw)
+
+
+def _gdelt_tone_signals(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    cutoff: datetime,
+    computed_at: datetime,
+    min_articles: int = 5,
+    min_abs_avg_tone: float = 1.0,
+    severity_denominator: float = 5.0,
+) -> List[Dict[str, Any]]:
+    """Aggregate GDELT article-level tone scores per source over the lookback window.
+
+    Reads from `gdelt_docs` (doc API ingest, single-numeric tone) and `gdelt_gkg`
+    (GKG ingest, 7-tuple V2Tone with parsed `v2_tone_avg`). Each `source` in
+    `sources.toml` corresponds to one query topic; the producer emits one
+    `sentiment_tone` signal per (source, window) when there are at least
+    `min_articles` parseable rows and the absolute average tone is at least
+    `min_abs_avg_tone`. Severity = `min(1.0, |avg_tone| / severity_denominator)`.
+    """
+    aggregates: Dict[str, Dict[str, Any]] = {}
+
+    if con.execute(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'gdelt_docs'"
+    ).fetchone()[0]:
+        for source, tone, ingested_at in con.execute(
+            """
+            SELECT source, tone, ingested_at
+            FROM gdelt_docs
+            WHERE ingested_at >= ?
+            """,
+            [cutoff],
+        ).fetchall():
+            value = _parse_tone_first_value(tone)
+            if value is None:
+                continue
+            agg = aggregates.setdefault(
+                source,
+                {"tones": [], "max_ts": None, "feeds": set()},
+            )
+            agg["tones"].append(value)
+            if ingested_at is not None and (agg["max_ts"] is None or ingested_at > agg["max_ts"]):
+                agg["max_ts"] = ingested_at
+            agg["feeds"].add("gdelt_docs")
+
+    if con.execute(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'gdelt_gkg'"
+    ).fetchone()[0]:
+        for source, v2_tone_avg, v21_date in con.execute(
+            """
+            SELECT source, v2_tone_avg, v21_date
+            FROM gdelt_gkg
+            WHERE v21_date >= ?
+            """,
+            [cutoff],
+        ).fetchall():
+            value = _as_float(v2_tone_avg)
+            if value is None:
+                continue
+            agg = aggregates.setdefault(
+                source,
+                {"tones": [], "max_ts": None, "feeds": set()},
+            )
+            agg["tones"].append(value)
+            if v21_date is not None and (agg["max_ts"] is None or v21_date > agg["max_ts"]):
+                agg["max_ts"] = v21_date
+            agg["feeds"].add("gdelt_gkg")
+
+    signals: List[Dict[str, Any]] = []
+    sources = list(aggregates.keys())
+    raw_paths_map = {src: _raw_paths_for_source(con, src, cutoff) for src in sources}
+
+    for source, agg in aggregates.items():
+        tones = agg["tones"]
+        n = len(tones)
+        if n < min_articles:
+            continue
+        avg_tone = sum(tones) / n
+        if abs(avg_tone) < min_abs_avg_tone:
+            continue
+        severity = min(1.0, abs(avg_tone) / severity_denominator) if severity_denominator > 0 else 0.0
+        direction = "negative" if avg_tone < 0 else "positive"
+        summary = (
+            f"GDELT {direction} sentiment for {source}: "
+            f"avg_tone={avg_tone:+.2f} over {n} articles"
+        )
+        details = {
+            "n_articles": n,
+            "avg_tone": avg_tone,
+            "min_tone": min(tones),
+            "max_tone": max(tones),
+            "feeds": sorted(agg["feeds"]),
+            "window_start": cutoff.isoformat(),
+            "window_end": computed_at.isoformat(),
+        }
+        ts_end = agg["max_ts"] or computed_at
+        payload = {
+            "signal_type": "sentiment_tone",
+            "source": source,
+            "entity_type": "gdelt_topic",
+            "entity_id": source,
+            "ts_start": cutoff.isoformat(),
+        }
+        signals.append(
+            {
+                "signal_id": _signal_id(payload),
+                "signal_type": "sentiment_tone",
+                "source": source,
+                "entity_type": "gdelt_topic",
+                "entity_id": source,
+                "ts_start": cutoff,
+                "ts_end": ts_end,
+                "severity_score": severity,
+                "summary": summary,
+                "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False),
+                "ingested_at": ts_end,
+                "computed_at": computed_at,
+                "raw_paths": json.dumps(raw_paths_map.get(source, [])),
+            }
+        )
+    return signals
+
+
 ProducerFn = Callable[..., List[Dict[str, Any]]]
 
 # Mapping of producer name -> source names in sources.toml that feed it.
@@ -859,6 +999,7 @@ PRODUCER_SOURCES: Dict[str, List[str]] = {
     ],
     "weather_alert": ["nws_alerts_active"],
     "disaster_declaration": ["openfema_disaster_declarations"],
+    "sentiment_tone": ["gdelt_democracy_24h", "gdelt_gkg_15min"],
 }
 
 # Module-level registry: ordered list of (name, adapter) where each adapter has the
@@ -918,6 +1059,12 @@ PRODUCERS: List[tuple[str, ProducerFn]] = [
         "disaster_declaration",
         lambda con, *, cutoff, computed_at, **cfg: _disaster_declaration_signals(
             con, cutoff=cutoff, computed_at=computed_at
+        ),
+    ),
+    (
+        "sentiment_tone",
+        lambda con, *, cutoff, computed_at, **cfg: _gdelt_tone_signals(
+            con, cutoff=cutoff, computed_at=computed_at, **cfg["thresholds"].get("sentiment_tone", {})
         ),
     ),
 ]

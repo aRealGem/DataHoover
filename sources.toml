@@ -68,10 +68,17 @@ redistribute = "with-attribution"
 name = "gdelt_democracy_24h"
 kind = "gdelt_doc_query"
 url = "https://api.gdeltproject.org/api/v2/doc/doc?query=democracy&mode=artlist&maxrecords=50&format=json&timespan=1day"
-description = "GDELT doc API query for 'democracy' (last 24h, 50 records)."
+description = "GDELT doc API query for 'democracy' (last 24h, 50 records). Feeds the `sentiment_tone` signal producer."
 license = "CC-BY-NC-SA-4.0"
 redistribute = "non-commercial"
-purpose = "raw_only"
+
+[[sources]]
+name = "gdelt_gkg_15min"
+kind = "gdelt_gkg"
+url = "http://data.gdeltproject.org/gdeltv2/lastupdate.txt"
+description = "GDELT 2.0 Global Knowledge Graph latest 15-min drop (per-article V2Tone, V2Themes, V2Persons, V2Locations, V2Organizations). Heavyweight: ~50-150 MB unzipped per run, ~50-200k rows. Conditional on the lastupdate filename advancing."
+license = "CC-BY-NC-SA-4.0"
+redistribute = "non-commercial"
 
 [[sources]]
 name = "ooni_us_recent"
@@ -263,3 +270,8 @@ min_ratio_delta = 0.3
 [signals.market_move]
 min_abs_return = 0.02
 severity_denominator = 0.10
+
+[signals.sentiment_tone]
+min_articles = 5
+min_abs_avg_tone = 1.0
+severity_denominator = 5.0

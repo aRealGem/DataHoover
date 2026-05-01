@@ -19,6 +19,11 @@ def test_defaults_match_hardcoded_behavior():
         "gdacs": {"min_severity": 0.6},
         "ooni": {"min_total": 10, "min_current_ratio": 0.5, "min_ratio_delta": 0.3},
         "market_move": {"min_abs_return": 0.02, "severity_denominator": 0.10},
+        "sentiment_tone": {
+            "min_articles": 5,
+            "min_abs_avg_tone": 1.0,
+            "severity_denominator": 5.0,
+        },
     }
 
 
