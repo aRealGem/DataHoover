@@ -78,5 +78,19 @@ Triaged but not yet started. Pull the top card when starting work.
 
 ### [publishing] Lane-resolver helpers for the publication pipeline
 - **Added:** 2026-05-01  **Owner:** Phase 4 session
+- **Status (2026-05-02):** Delivered on closed PR [#3](https://github.com/aRealGem/DataHoover/pull/3) (branch `claude/beautiful-dijkstra-2d4c05`, head `96d8085`) as `src/datahoover/lane.py` with 12 unit tests. Not merged because PR [#4](https://github.com/aRealGem/DataHoover/pull/4) (a parallel sentiment-PDF script) shipped first. The helpers will be absorbed into the merged pipeline via the card below.
 - **Problem:** Phase 4 (canvas → PDF → ExpressionPi) needs `lane_for_redistribute()`, `lane_for_publication()`, and `attribution_block()` helpers to compute the worst-case lane across sources used in a publication and render the attribution footer. Schema (`Source.license`, `Source.redistribute`, `LICENSE_TAGS`, `REDISTRIBUTE_TAGS`) is already on the branch — these helpers are publication-scope and belong in the Phase 4 PR.
 - **Acceptance:** Implemented as part of `scripts/publish_to_expressionpi.py` or a new `datahoover/lane.py` (publication-side), with tests.
+
+---
+
+### [publishing] Phase-4b: absorb PR #3's `lane.py` + lane-bucketed index into the sentiment publish script
+- **Added:** 2026-05-02  **Owner:** unassigned
+- **Problem:** PR [#4](https://github.com/aRealGem/DataHoover/pull/4) (`scripts/publish_sentiment_to_expressionpi.py`, merged in `d01e391`) ships an inline `_lane_note()` helper. The closed PR [#3](https://github.com/aRealGem/DataHoover/pull/3) (`claude/beautiful-dijkstra-2d4c05`, head `96d8085`, **left undeleted for cherry-pick**) implemented a proper `src/datahoover/lane.py` module with `lane_for_redistribute`, `lane_for_publication` (worst-case across sources), `attribution_block`, and a tested `COMMERCIAL_SAFE = {"public-domain", "with-attribution", "share-alike"}` set — which already matches the `_lane_for()` helper at `scripts/build_sentiment_dashboard.py:41`. Three definitions of the same logic and growing.
+- **Acceptance:**
+  - Cherry-pick `src/datahoover/lane.py` and `tests/test_lane.py` from `claude/beautiful-dijkstra-2d4c05`.
+  - Replace `_lane_note()` in `scripts/publish_sentiment_to_expressionpi.py` with `lane_for_publication` + `attribution_block` from `datahoover.lane`.
+  - Refactor `scripts/build_sentiment_dashboard.py:_lane_for` to import from `datahoover.lane` (kills the duplicate `COMMERCIAL_SAFE` constant).
+  - `pytest tests/test_lane.py -v` → 12/12 pass.
+  - Optional stretch: add lane chips (commercial-safe vs personal-use) to the rollup `index.html` alongside the existing canvas/sentiment categorisation.
+- **Notes:** Two latent risks surfaced during the PR #3 review and worth tracking separately when this card is picked up: (1) `mixed-fred` sources currently map to commercial-safe even though FRED's SP500/DJIA/CBBTCUSD are not redistributable per `docs/licensing.md`; (2) PDFs themselves carry no attribution footer (it lives only in `index.html`), which becomes a problem when commercial-safe publications start shipping. See the PR #3 close comment for the full disposition.
