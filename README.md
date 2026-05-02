@@ -38,6 +38,10 @@ hoover snapshot --format parquet
 
 Run `python scripts/list_sources.py` to print a Markdown table of every configured source (name, kind, description) if you need a quick inventory.
 
+## Publishing canvases (PDF + lane index → ExpressionPi)
+
+`hoover publish` renders Cursor `.canvas.tsx` files to dated PDFs, writes `data/published/index.html` (commercial-safe vs personal-use lanes + attribution blocks), then `rsync`s to the Pi beside DokuWiki. One-time deps: **`scripts/canvas-pdf/`** (`npm install`, Playwright Chromium). Full commands, Apache `Alias`, SSH key gotchas, DokuWiki link pattern: **[`docs/publishing.md`](docs/publishing.md)**.
+
 ## Canvas market snapshot (DuckDB)
 
 The **sharp-runup-bull-market** Cursor canvas can embed numbers from this warehouse (ETF daily bars + FRED indices). After ingesting:

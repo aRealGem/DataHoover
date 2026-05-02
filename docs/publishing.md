@@ -50,11 +50,34 @@ Stage by stage:
 hoover publish --dry-run
 
 # Live publish (run from a regular Terminal so rsync can reach the LAN)
-hoover publish --remote pi@expressionpi.home.arpa \
+hoover publish --remote jackie@expressionpi.home.arpa \
+               --remote-path /var/www/datahoover/
+
+# From an un-installed checkout (same flags work from a Claude worktree).
+PYTHONPATH=src python -m datahoover.cli publish --dry-run
+PYTHONPATH=src python -m datahoover.cli publish \
+               --remote jackie@expressionpi.home.arpa \
                --remote-path /var/www/datahoover/
 ```
 
 `hoover publish --help` lists every flag.
+
+## Toolchain (what actually runs)
+
+The Python entrypoint ([`publish.py`](../src/datahoover/publish.py)) orchestrates PDF
+render plus `rsync`; there is **no Docker** involvement.
+
+1. **Python CLI** (`hoover publish` or `PYTHONPATH=src python -m datahoover.cli publish`)
+   validates `publications.toml` vs `sources.toml`, writes dated PDF paths under
+   `data/published/<DATE>/`, and renders `data/published/index.html`.
+2. **canvas-pdf** — Node + Playwright Chromium in [`scripts/canvas-pdf/`](../scripts/canvas-pdf/).
+   From repo root once per machine/worktree clone:
+   ```bash
+   cd scripts/canvas-pdf && npm install && npx playwright install chromium
+   ```
+   Needs **Node 20+**.
+3. **`rsync -av`** (live only): syncs **`data/published/`** to the Pi’s **`--remote-path`**
+   (typically ends with **`/`**, mirroring `data/published/*` onto the served tree).
 
 ## Lane semantics
 
@@ -122,18 +145,50 @@ doesn't change the lane logic and would require either modifying every canvas
 template or adding a Python PDF-manipulation dependency. Tracked as a kanban
 card.
 
-## ExpressionPi prerequisites
+## ExpressionPi (verified layout — May 2026)
 
-Out of scope for the publish PR but blocking the first live run:
+Hostname **`expressionpi.home.arpa`** (LAN only unless you tunnel). This is **not**
+part of DokuWiki’s tree; uploads go to **`/var/www/datahoover/`** on disk and are
+surfaced at **`/datahoover/`** in HTTP.
 
-- **SSH key.** Currently password-only on `pi@expressionpi.home.arpa`. Run
-  `ssh-copy-id pi@expressionpi.home.arpa` once so rsync (and any future
-  cron) can run non-interactively.
-- **Webserver docroot.** The Pi has nginx or Apache running alongside
-  DokuWiki. Pick a directory for the publish target (e.g.
-  `/var/www/datahoover/`) and pass it as `--remote-path`. There is no default.
-- **DNS.** `expressionpi.home.arpa` resolves to `192.168.7.57` on the LAN.
-  From off-LAN you'll need a Cloudflare tunnel or VPN — also a kanban card.
+How to confirm which web daemon is answering (on the Pi): `systemctl is-active
+apache2 nginx`; `curl -sI http://127.0.0.1/ | grep -i '^Server:'`; open ports:
+`ss -tlnp | grep -E ':80 |:443 '`.
+
+Production mapping on ExpressionPi uses **Apache 2**:
+
+- **`/etc/apache2/sites-available/dokuwiki.conf`** — `<VirtualHost *:80>` with
+  **`DocumentRoot /var/www/dokuwiki`**, plus **`Alias /datahoover`
+  `/var/www/datahoover`** and a permissive `<Directory /var/www/datahoover>`
+  block. Before editing manually, snapshot the conf (a backup alongside the
+  vhost existed as **`dokuwiki.conf.bak.before-datahoover`** when this was wired).
+  After changes: **`sudo apache2ctl configtest`** then **`sudo systemctl reload apache2`**.
+- **Publish target on disk:** **`/var/www/datahoover/`** (`jackie:www-data`,
+  **`2775`**, so uploads as user **`jackie`** pick up **`www-data`** group).
+- **Public URLs:** **`http://expressionpi.home.arpa/datahoover/`**
+  (`index.html` and dated PDF subfolders underneath).
+
+CLI example for this host:
+
+```bash
+hoover publish --remote jackie@expressionpi.home.arpa \
+               --remote-path /var/www/datahoover/
+```
+
+**SSH pubkey for non-interactive `rsync`:** Run **`ssh-copy-id` from your Mac**,
+never from an SSH shell already logged into the Pi — the `-i ~/.ssh/*.pub`
+path must exist on **your workstation**.
+
+```bash
+ssh-copy-id -i ~/.ssh/id_ed25519.pub jackie@expressionpi.home.arpa
+ssh -o BatchMode=yes -i ~/.ssh/id_ed25519 jackie@expressionpi.home.arpa 'echo ok'
+```
+
+**Linking from DokuWiki** (same hostname, avoids hard-coding fragile page-relative URLs): use the **site-root path** **`/datahoover/`**, e.g. HTML
+`<a href="/datahoover/">DataHoover publications</a>` / `[[/datahoover/|…]]`
+if your markup accepts slash-led targets.
+
+Remote access beyond the LAN (VPN/tunnel/off-site DNS) stays a separate ops concern.
 
 ## Cron / scheduling
 
