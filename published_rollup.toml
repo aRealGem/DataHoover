@@ -1,0 +1,10 @@
+# Merged into data/published/index.html (section "Canvas & analytics PDFs").
+# Adjust href date folders if your PDFs live elsewhere on the Pi.
+
+[[manual]]
+title = "Sharp run-up: bull market signal"
+href = "./2026-05-02/sharp-runup-bull-market-signal.pdf"
+
+[[manual]]
+title = "Iran war: market impact"
+href = "./2026-05-02/iran-war-market-impact.pdf"

@@ -5,10 +5,12 @@
   "description": "Render a Cursor .canvas.tsx file to a PDF using Cursor's bundled canvas runtime.",
   "type": "module",
   "bin": {
-    "canvas-pdf": "./bin/canvas-pdf.mjs"
+    "canvas-pdf": "./bin/canvas-pdf.mjs",
+    "html-pdf": "./bin/html-pdf.mjs"
   },
   "scripts": {
     "canvas-pdf": "tsx src/cli.ts",
+    "html-pdf": "tsx src/htmlCli.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

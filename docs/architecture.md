@@ -292,3 +292,31 @@ The Tier 1 sentiment-index sources land in dedicated DuckDB tables (`alternative
 ### Catalog split
 
 Catalog sources describe dataset-search endpoints (CKAN `package_search`, Socrata SODA discovery, Opendatasoft Explore catalog) rather than substantive data feeds. They live in `catalogs.toml`; [`load_sources`](../src/datahoover/sources.py) transparently merges any sibling `catalogs.toml` at load time, so `hoover ingest-ckan` / `ingest-socrata` / `ingest-opendatasoft` keep finding the same names without any new CLI surface.
+
+## Publishing pipeline (PDFs → ExpressionPi)
+
+Static PDFs can be served from a LAN web root (e.g. nginx on ExpressionPi).
+
+```mermaid
+flowchart LR
+  subgraph local [Mac / dev machine]
+    canvasTsx[".canvas.tsx"]
+    duckdb["warehouse.duckdb"]
+    buildSent["build_sentiment_dashboard.py"]
+    canvasPdf["canvas-pdf"]
+    htmlPdf["html-pdf"]
+    rollupToml["published_rollup.toml"]
+    publishPy["publish_sentiment_to_expressionpi.py"]
+    duckdb --> buildSent
+    buildSent --> htmlPdf
+    canvasTsx --> canvasPdf
+    rollupToml --> publishPy
+    htmlPdf --> publishPy
+    canvasPdf -->|"manual deploy"| piRoot["Pi docroot"]
+    publishPy -->|"rsync"| piRoot
+  end
+```
+
+- **Sentiment:** [`scripts/build_sentiment_dashboard.py`](../scripts/build_sentiment_dashboard.py) → HTML → [`scripts/canvas-pdf/`](../scripts/canvas-pdf/) **`html-pdf`** → PDF under `data/published/<date>/`.
+- **Rollup index:** [`published_rollup.toml`](../published_rollup.toml) supplies **`[[manual]]`** links (canvas PDFs); the publish script merges them into `data/published/index.html`.
+- **Rsync:** Dated-folder sync **does not** use `--delete` by default (extra PDFs on the Pi are preserved). See **[docs/publishing.md](publishing.md)**.
