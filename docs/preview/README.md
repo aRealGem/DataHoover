@@ -37,6 +37,18 @@ open data/dashboard/sentiment.html      # macOS
 xdg-open data/dashboard/sentiment.html  # Linux
 ```
 
+## PDF export and ExpressionPi
+
+After `build_sentiment_dashboard.py`, render a single-page PDF with Playwright:
+
+```bash
+cd scripts/canvas-pdf && npm install && npx playwright install chromium   # once
+cd ../..
+node scripts/canvas-pdf/bin/html-pdf.mjs data/dashboard/sentiment.html -o data/dashboard/sentiment.pdf --width 1280
+```
+
+End-to-end publish (PDF + merged index + `rsync`) is documented in **[docs/publishing.md](../publishing.md)** — configure **`published_rollup.toml`** so canvas PDFs stay listed next to sentiment releases.
+
 ## Why this file is committed when `data/dashboard/` is gitignored
 
 `data/dashboard/` is correctly ignored — its contents are derived artifacts

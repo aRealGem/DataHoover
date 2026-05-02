@@ -42,6 +42,35 @@ npx canvas-pdf foo.canvas.tsx --runtime /path/to/canvas-runtime.esm.js
 CURSOR_CANVAS_RUNTIME=/path/to/canvas-runtime.esm.js npx canvas-pdf foo.canvas.tsx
 ```
 
+## html-pdf (static HTML dashboards)
+
+The companion `html-pdf` command renders an arbitrary `.html` file to a **single tall PDF**
+(headless Chromium). It targets dashboards that pull Plotly from a CDN (same Playwright
+install as above).
+
+```bash
+cd scripts/canvas-pdf
+node bin/html-pdf.mjs ../../docs/preview/sentiment-dashboard-preview.html -o /tmp/sentiment.pdf --width 1280
+```
+
+To build **live** sentiment HTML from DuckDB, render PDF, and rsync to ExpressionPi (same
+layout as other `data/published/<YYYY-MM-DD>/` drops):
+
+```bash
+python scripts/publish_sentiment_to_expressionpi.py \
+  --remote pi@expressionpi.home.arpa \
+  --remote-path /var/www/datahoover/
+```
+
+Use `--dry-run` to generate `data/published/<date>/` locally without `rsync`.
+
+**Roll-up index:** add your canvas PDF links to repo-root `published_rollup.toml` as `[[manual]]`
+entries (`title` + `href`). They are merged into `data/published/index.html` next to sentiment dates so a sentiment publish does not remove Iran / run-up PDFs from the listing.
+
+Use `--no-sync-root-index` if you want to rsync only the dated sentiment folder and leave the Pi's existing `index.html` unchanged.
+
+The dated-folder rsync **does not** pass `--delete` by default (so canvas PDFs sitting next to `sentiment-dashboard.pdf` on the Pi are not removed). Only use `--delete-remote-day` if you want an exact mirror.
+
 ## How it works
 
 1. esbuild bundles your `.canvas.tsx` with the **classic** JSX transform

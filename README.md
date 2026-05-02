@@ -58,6 +58,11 @@ It prints a summary plus a TSX paste-helper. Copy the suggested `Stat` / `Table`
 
 `fred_macro_watchlist` includes **VIXCLS** (VIX), **T10Y2Y** (10Y–2Y spread), and **BAMLH0A0HYM2** (ICE BofA US High Yield OAS). **RSP** on the Twelve Data watchlist supports an equal-weight minus cap-weight read (RSP − SPY) in the same script. If a FRED series ID changes or returns errors, adjust `sources.toml` and re-ingest.
 
+## Publishing PDFs (canvas + sentiment)
+
+- **Canvas → PDF:** [`scripts/canvas-pdf/README.md`](scripts/canvas-pdf/README.md) (`canvas-pdf`, Playwright).
+- **Sentiment dashboard → PDF + ExpressionPi rsync:** [`docs/publishing.md`](docs/publishing.md) — includes **`html-pdf`**, **`publish_sentiment_to_expressionpi.py`**, and **`published_rollup.toml`** (manual links merged into the rollup index).
+
 ## Testing (no network)
 
 ```bash
