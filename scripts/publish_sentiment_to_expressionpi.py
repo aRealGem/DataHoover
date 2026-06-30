@@ -199,6 +199,12 @@ def _collect_date_dirs(published_root: Path) -> list[str]:
                 datetime.strptime(p.name, "%Y-%m-%d")
             except ValueError:
                 continue
+            # Only list dated folders that actually contain the sentiment
+            # dashboard PDF; canvas-only dated drops (e.g. iran refresh) live
+            # in the same date-folder convention but should not appear under
+            # the "Sentiment dashboards" heading.
+            if not (p / "sentiment-dashboard.pdf").is_file():
+                continue
             out.append(p.name)
     return sorted(out, reverse=True)
 

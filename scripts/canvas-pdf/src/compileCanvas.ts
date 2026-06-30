@@ -31,6 +31,11 @@ export async function compileCanvas(entry: string): Promise<CompiledCanvas> {
     jsxFactory: "React.createElement",
     jsxFragment: "React.Fragment",
     external: ["cursor/canvas", "react", "react/jsx-runtime", "react-dom"],
+    // Inline tsconfig: prevents esbuild from picking up a tsconfig.json near
+    // the entry (e.g. Cursor's per-canvas-dir config sets jsx: "react-jsx"
+    // which would otherwise override our explicit classic-JSX options and
+    // produce imports of "react/jsx-runtime" that the harness can't resolve).
+    tsconfigRaw: "{}",
     write: false,
     sourcemap: "inline",
     logLevel: "silent",
