@@ -33,3 +33,6 @@ only/
 if/
 data-hoover.zip
 .env
+
+# Canvas dev deps (installed only in the Cursor projects dir)
+canvases/node_modules/
