@@ -504,6 +504,68 @@ def init_db(db_path: Path) -> None:
             );
             """
         )
+        # --- Fiscal-sustainability collector (L1 raw / L2 derived / L3 alerts) ---
+        # L1. Append-only by design: history is never overwritten in place, and
+        # L2 reads latest-by-fetch. Re-running a collector adds a new vintage of
+        # rows rather than mutating the old ones, so a derived figure can always
+        # be traced back to the bytes it came from via raw_payload_ref.
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fiscal_raw_observations (
+              series_id        VARCHAR,
+              source           VARCHAR,
+              observation_date DATE,
+              value            DOUBLE,
+              fetched_at_utc   TIMESTAMP,
+              raw_payload_ref  VARCHAR
+            );
+            """
+        )
+        # L2. Fully recomputable from fiscal_raw_observations; safe to drop.
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fiscal_derived (
+              metric         VARCHAR,
+              period_kind    VARCHAR,
+              period         VARCHAR,
+              value          DOUBLE,
+              units          VARCHAR,
+              derived_at_utc TIMESTAMP,
+              inputs_json    VARCHAR
+            );
+            """
+        )
+        # L3. Persistence state per alert, plus the fire/clear log.
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fiscal_alert_state (
+              alert_id            VARCHAR,
+              severity            VARCHAR,
+              description         VARCHAR,
+              fired               BOOLEAN,
+              consecutive_periods INTEGER,
+              required_periods    INTEGER,
+              current_value       DOUBLE,
+              threshold           DOUBLE,
+              period_kind         VARCHAR,
+              latest_period       VARCHAR,
+              evaluated_at_utc    TIMESTAMP,
+              detail_json         VARCHAR
+            );
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fiscal_alert_log (
+              alert_id      VARCHAR,
+              event         VARCHAR,
+              at_utc        TIMESTAMP,
+              value         DOUBLE,
+              threshold     DOUBLE,
+              latest_period VARCHAR
+            );
+            """
+        )
         # Create indexes for performance
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_signal_id ON signals(signal_id);")
         con.execute("CREATE INDEX IF NOT EXISTS idx_signals_severity ON signals(severity_score DESC, computed_at DESC);")
@@ -557,8 +619,218 @@ def init_db(db_path: Path) -> None:
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_gdelt_tone_key ON gdelt_timeline_tone(source, ts);"
         )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fiscal_raw_key ON fiscal_raw_observations(series_id, observation_date, fetched_at_utc DESC);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fiscal_derived_key ON fiscal_derived(metric, period);"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fiscal_alert_state_key ON fiscal_alert_state(alert_id);"
+        )
     finally:
         con.close()
+
+
+def append_fiscal_raw_observations(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Append L1 fiscal observations. Never updates or deletes.
+
+    History is immutable here: a re-fetch of the same series and date writes a
+    new row with a later `fetched_at_utc`, and `read_fiscal_raw_panel` resolves
+    to the latest vintage. That is what makes the raw layer an audit trail
+    rather than a cache.
+    """
+    con = duckdb.connect(str(db_path))
+    appended = 0
+    try:
+        for r in rows:
+            con.execute(
+                "INSERT INTO fiscal_raw_observations VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    r["series_id"],
+                    r["source"],
+                    r.get("observation_date"),
+                    r.get("value"),
+                    r.get("fetched_at_utc"),
+                    r.get("raw_payload_ref"),
+                ],
+            )
+            appended += 1
+    finally:
+        con.close()
+    return appended
+
+
+def read_fiscal_raw_panel(
+    db_path: Path, *, series_ids: Iterable[str] | None = None
+) -> Dict[str, Dict[Any, Any]]:
+    """Read L1 raw as `{series_id: {observation_date: value}}`, latest fetch wins.
+
+    Where the same `(series_id, observation_date)` has been fetched more than
+    once, the row with the newest `fetched_at_utc` is returned and the older
+    vintages stay on disk untouched.
+    """
+    con = duckdb.connect(str(db_path))
+    try:
+        query = """
+            SELECT series_id, observation_date, value
+            FROM (
+              SELECT
+                series_id,
+                observation_date,
+                value,
+                ROW_NUMBER() OVER (
+                  PARTITION BY series_id, observation_date
+                  ORDER BY fetched_at_utc DESC
+                ) AS vintage
+              FROM fiscal_raw_observations
+            )
+            WHERE vintage = 1
+        """
+        params: list = []
+        if series_ids is not None:
+            wanted = list(series_ids)
+            if not wanted:
+                return {}
+            placeholders = ", ".join("?" for _ in wanted)
+            query += f" AND series_id IN ({placeholders})"
+            params.extend(wanted)
+        query += " ORDER BY series_id, observation_date"
+        rows = con.execute(query, params).fetchall()
+    finally:
+        con.close()
+
+    panel: Dict[str, Dict[Any, Any]] = {}
+    for series_id, observation_date, value in rows:
+        panel.setdefault(series_id, {})[observation_date] = value
+    return panel
+
+
+def replace_fiscal_derived(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Replace the entire derived store in one transaction.
+
+    A full replace rather than an upsert because L2 is a pure function of L1: a
+    partial derived store is never the right answer, and rebuilding is cheap.
+    """
+    con = duckdb.connect(str(db_path))
+    written = 0
+    try:
+        con.execute("BEGIN TRANSACTION")
+        con.execute("DELETE FROM fiscal_derived")
+        for r in rows:
+            con.execute(
+                "INSERT INTO fiscal_derived VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    r["metric"],
+                    r["period_kind"],
+                    r["period"],
+                    r.get("value"),
+                    r.get("units"),
+                    r.get("derived_at_utc"),
+                    r.get("inputs_json"),
+                ],
+            )
+            written += 1
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    finally:
+        con.close()
+    return written
+
+
+def clear_fiscal_derived(db_path: Path) -> None:
+    """Drop every derived row, leaving L1 raw intact.
+
+    Used by the verify step to prove the L1/L2 separation: after this, a
+    re-derive must reproduce identical numbers from raw alone.
+    """
+    con = duckdb.connect(str(db_path))
+    try:
+        con.execute("DELETE FROM fiscal_derived")
+    finally:
+        con.close()
+
+
+def read_fiscal_alert_fired_flags(db_path: Path) -> Dict[str, bool]:
+    """Read the last stored fired flag per alert, for transition detection."""
+    con = duckdb.connect(str(db_path))
+    try:
+        rows = con.execute(
+            """
+            SELECT alert_id, fired
+            FROM (
+              SELECT alert_id, fired,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY alert_id ORDER BY evaluated_at_utc DESC
+                     ) AS recency
+              FROM fiscal_alert_state
+            )
+            WHERE recency = 1
+            """
+        ).fetchall()
+    finally:
+        con.close()
+    return {alert_id: bool(fired) for alert_id, fired in rows}
+
+
+def replace_fiscal_alert_state(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Replace the current alert-state snapshot (the log is append-only)."""
+    con = duckdb.connect(str(db_path))
+    written = 0
+    try:
+        con.execute("BEGIN TRANSACTION")
+        con.execute("DELETE FROM fiscal_alert_state")
+        for r in rows:
+            con.execute(
+                "INSERT INTO fiscal_alert_state VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    r["alert_id"],
+                    r.get("severity"),
+                    r.get("description"),
+                    r.get("fired"),
+                    r.get("consecutive_periods"),
+                    r.get("required_periods"),
+                    r.get("current_value"),
+                    r.get("threshold"),
+                    r.get("period_kind"),
+                    r.get("latest_period"),
+                    r.get("evaluated_at_utc"),
+                    r.get("detail_json"),
+                ],
+            )
+            written += 1
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    finally:
+        con.close()
+    return written
+
+
+def append_fiscal_alert_log(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
+    """Append fire/clear transitions. Append-only — the log is the history."""
+    con = duckdb.connect(str(db_path))
+    appended = 0
+    try:
+        for r in rows:
+            con.execute(
+                "INSERT INTO fiscal_alert_log VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    r["alert_id"],
+                    r.get("event"),
+                    r.get("at_utc"),
+                    r.get("value"),
+                    r.get("threshold"),
+                    r.get("latest_period"),
+                ],
+            )
+            appended += 1
+    finally:
+        con.close()
+    return appended
 
 
 def upsert_usgs_events(db_path: Path, rows: Iterable[Dict[str, Any]]) -> int:
