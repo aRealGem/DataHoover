@@ -5,6 +5,7 @@ monkeypatch the module-level fetch helpers instead.
 """
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -379,6 +380,136 @@ def test_debt_to_penny_projection_strips_thousands_separators():
     assert fiscal_treasury.project_debt_to_penny(records) == [
         (date(2026, 7, 31), 38123456789.01)
     ]
+
+
+# --------------------------------------------------------------------------
+# Fetch helper script
+# --------------------------------------------------------------------------
+
+
+def _load_fetch_script():
+    """Import scripts/fetch_fiscal_drop.py by path (it is not a package module)."""
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "fetch_fiscal_drop.py"
+    spec = importlib.util.spec_from_file_location("fetch_fiscal_drop", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_fetch_script_series_list_matches_the_package():
+    """The script inlines its series list so it can run without DataHoover
+    installed; this stops the two lists drifting apart."""
+    from datahoover.fiscal.derive import ALL_FRED_SERIES
+
+    script = _load_fetch_script()
+    assert tuple(script.FRED_SERIES) == tuple(ALL_FRED_SERIES)
+
+
+def test_fetch_script_imports_nothing_from_datahoover():
+    """It must run on a machine that has neither the package nor its deps."""
+    path = Path(__file__).resolve().parents[1] / "scripts" / "fetch_fiscal_drop.py"
+    source = path.read_text(encoding="utf-8")
+    for forbidden in ("import httpx", "import duckdb", "from datahoover", "import datahoover"):
+        assert forbidden not in source, f"fetch script must not use {forbidden!r}"
+
+
+def test_fetch_script_rejects_a_body_that_is_not_a_fred_csv():
+    script = _load_fetch_script()
+    assert script._looks_like_fred_csv(b"observation_date,GDP\n2025-01-01,1.0\n")
+    assert script._looks_like_fred_csv(b"DATE,GDP\n2025-01-01,1.0\n")
+    assert not script._looks_like_fred_csv(b"<!DOCTYPE html><html>error</html>")
+    assert not script._looks_like_fred_csv(b"")
+
+
+def test_fetch_script_retry_schedule_matches_the_collector():
+    script = _load_fetch_script()
+    assert tuple(script.BACKOFF_SCHEDULE_S) == _fiscal_http.BACKOFF_SCHEDULE_S
+    assert script.MIN_SPACING_S == _fiscal_http.MIN_REQUEST_SPACING_S
+
+
+def test_fetch_script_get_returns_bytes_verbatim(tmp_path):
+    """Exercise the script's real urllib path against a local server.
+
+    `_get` is the part that runs unattended on someone else's machine, so it is
+    worth testing for real rather than mocking. Bodies must come back
+    byte-identical — this file becomes the audit trail, and a transformed body
+    is no longer evidence of what the source said.
+    """
+    import http.server
+    import threading
+
+    script = _load_fetch_script()
+    payload = b"observation_date,GDP\n2025-01-01,29962.047\n2025-04-01,30331.117\n"
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - http.server API
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args):
+            return
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/fredgraph.csv"
+        body = script._get(url, {"id": "GDP"})
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert body == payload
+    assert script._looks_like_fred_csv(body)
+
+
+def test_fetch_fred_skips_existing_files_so_a_run_resumes(tmp_path, monkeypatch):
+    script = _load_fetch_script()
+    calls: list = []
+
+    def fake_get(url, params=None):
+        calls.append(params["id"])
+        return b"observation_date,X\n2025-01-01,1.0\n"
+
+    monkeypatch.setattr(script, "_get", fake_get)
+    monkeypatch.setattr(script, "FRED_SERIES", ("GDP", "GS10"))
+
+    # Pretend GDP was already fetched by an interrupted earlier run.
+    (tmp_path / "GDP.csv").write_text("observation_date,GDP\n2025-01-01,1.0\n", encoding="utf-8")
+
+    fetched, skipped, failures = script.fetch_fred(tmp_path, force=False)
+    assert (fetched, skipped, failures) == (1, 1, [])
+    assert calls == ["GS10"], "an already-present series must not be refetched"
+
+
+def test_fetch_fred_reports_a_bad_body_instead_of_writing_it(tmp_path, monkeypatch):
+    """An error page must not land in the drop directory as if it were data."""
+    script = _load_fetch_script()
+    monkeypatch.setattr(script, "_get", lambda url, params=None: b"<html>rate limited</html>")
+    monkeypatch.setattr(script, "FRED_SERIES", ("GDP",))
+
+    fetched, skipped, failures = script.fetch_fred(tmp_path, force=True)
+    assert fetched == 0
+    assert len(failures) == 1 and "not a FRED CSV" in failures[0]
+    assert not (tmp_path / "GDP.csv").exists()
+
+
+def test_fetch_script_writes_treasury_as_a_page_list_the_importer_accepts(tmp_path, monkeypatch):
+    """End-to-end shape check: what the script writes, --from-dir must read."""
+    script = _load_fetch_script()
+    page = {"data": [{"record_date": "2026-07-31", "tot_pub_debt_out_amt": "1.0"}]}
+    monkeypatch.setattr(script, "_get", lambda url, params=None: json.dumps(page).encode())
+
+    fetched, skipped, failures = script.fetch_treasury(tmp_path, force=True)
+    assert (fetched, skipped, failures) == (3, 0, [])
+
+    records = fiscal_treasury.load_local_endpoint(tmp_path, "debt_to_penny")
+    assert records == page["data"]
 
 
 # --------------------------------------------------------------------------

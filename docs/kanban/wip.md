@@ -50,17 +50,10 @@ See [architecture.md § pipeline 10](../architecture.md) for the full design.
   **zero** network calls:
 
   ```
-  # on a networked machine, one file per series (>=2s apart):
-  for S in GDP GDPC1 GDPDEF GDPPOT CPIAUCSL FYGFDPUB FYGFD FYOINT FYFSD \
-           FYPUGDA188S GFDGDPA188S FYOIGDA188S FYFSGDA188S GFDEGDQ188S \
-           FYGFGDQ188S GFDEBTN FYGFDPUN A091RC1Q027SBEA FDEFX GS10 DGS10 \
-           DFII10 T10YIE THREEFYTP10 EXPINF10YR FDHBFIN FDHBFRBN FDHBPIN; do
-    curl -s "https://fred.stlouisfed.org/graph/fredgraph.csv?id=$S" -o "drop/$S.csv"
-    sleep 2
-  done
-  # plus drop/avg_interest_rates.json, drop/debt_to_penny.json,
-  #      drop/mspd_table_1.json from api.fiscaldata.treasury.gov
+  # on any machine that can reach the two hosts — stdlib only, no install:
+  python3 scripts/fetch_fiscal_drop.py drop/
 
+  # then, wherever DataHoover lives:
   hoover ingest-fiscal-fred --source fiscal_fred_core     --from-dir drop
   hoover ingest-fiscal-fred --source fiscal_fred_rates    --from-dir drop
   hoover ingest-fiscal-fred --source fiscal_fred_holders  --from-dir drop
@@ -74,8 +67,20 @@ See [architecture.md § pipeline 10](../architecture.md) for the full design.
   `{"data": [...]}` body or a page list for the Treasury files. Imported
   bodies are copied into `data/raw/` so `raw_payload_ref` outlives the drop
   directory. A missing series raises rather than silently falling through to a
-  fetch. Verified end-to-end offline: 28 series + 3 endpoints imported with
-  `requests=0`, and the golden harness switches from skipped to executing.
+  fetch.
+
+  [`scripts/fetch_fiscal_drop.py`](../../scripts/fetch_fiscal_drop.py) is
+  stdlib-only and imports nothing from DataHoover, so the fetching host needs
+  neither the package nor its dependencies. It carries the same ≥2s spacing and
+  5/8/11/14s backoff as the collector, writes bodies **verbatim**, refuses to
+  save a response that is not a FRED CSV, and skips files that already exist so
+  an interrupted run resumes. A test asserts its series list stays in lockstep
+  with `ALL_FRED_SERIES`.
+
+  Rehearsed end-to-end against a local server: the script fetched 28 CSVs + 3
+  JSON bodies byte-identical, the three FRED blocks and Treasury imported with
+  `requests=0`, `derive-fiscal` built a 78-year panel and 536 forward months,
+  and the golden harness switched from skipped to executing and asserting.
 
 **Open decision**
 
