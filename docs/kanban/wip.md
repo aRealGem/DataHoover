@@ -32,15 +32,50 @@ See [architecture.md § pipeline 10](../architecture.md) for the full design.
   `api.fiscaldata.treasury.gov` are both blocked by the session egress policy
   (403 at CONNECT). Every golden-value test is written and will run the moment
   raw data lands; until then they **skip with a reason** rather than reporting
-  a misleading green. Unblock the two hosts, then:
+  a misleading green.
+
+  *Route A — unblock the hosts,* then:
 
   ```
   hoover ingest-fiscal-fred --source fiscal_fred_core
   hoover ingest-fiscal-fred --source fiscal_fred_rates
+  hoover ingest-fiscal-fred --source fiscal_fred_holders
   hoover ingest-fiscal-treasury
   hoover derive-fiscal --show-alerts
   pytest tests/test_fiscal_golden.py -q -s
   ```
+
+  *Route B — no policy change.* Fetch the bodies on any machine with network
+  access, drop them in a directory, and import offline. `--from-dir` makes
+  **zero** network calls:
+
+  ```
+  # on a networked machine, one file per series (>=2s apart):
+  for S in GDP GDPC1 GDPDEF GDPPOT CPIAUCSL FYGFDPUB FYGFD FYOINT FYFSD \
+           FYPUGDA188S GFDGDPA188S FYOIGDA188S FYFSGDA188S GFDEGDQ188S \
+           FYGFGDQ188S GFDEBTN FYGFDPUN A091RC1Q027SBEA FDEFX GS10 DGS10 \
+           DFII10 T10YIE THREEFYTP10 EXPINF10YR FDHBFIN FDHBFRBN FDHBPIN; do
+    curl -s "https://fred.stlouisfed.org/graph/fredgraph.csv?id=$S" -o "drop/$S.csv"
+    sleep 2
+  done
+  # plus drop/avg_interest_rates.json, drop/debt_to_penny.json,
+  #      drop/mspd_table_1.json from api.fiscaldata.treasury.gov
+
+  hoover ingest-fiscal-fred --source fiscal_fred_core     --from-dir drop
+  hoover ingest-fiscal-fred --source fiscal_fred_rates    --from-dir drop
+  hoover ingest-fiscal-fred --source fiscal_fred_holders  --from-dir drop
+  hoover ingest-fiscal-treasury --from-dir drop
+  hoover derive-fiscal --show-alerts
+  pytest tests/test_fiscal_golden.py -q -s
+  ```
+
+  `--from-dir` accepts `<SERIES_ID>.csv` or this collector's own
+  `fred_<SERIES_ID>_<date>.csv` cache layout, and either a single
+  `{"data": [...]}` body or a page list for the Treasury files. Imported
+  bodies are copied into `data/raw/` so `raw_payload_ref` outlives the drop
+  directory. A missing series raises rather than silently falling through to a
+  fetch. Verified end-to-end offline: 28 series + 3 endpoints imported with
+  `requests=0`, and the golden harness switches from skipped to executing.
 
 **Open decision**
 

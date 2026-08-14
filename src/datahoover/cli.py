@@ -222,6 +222,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Ignore the same-day raw cache and re-fetch every series",
     )
+    p_fiscal_fred.add_argument(
+        "--from-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Import CSV bodies from this directory instead of fetching (no network). "
+            "Accepts <SERIES_ID>.csv or fred_<SERIES_ID>_<date>.csv"
+        ),
+    )
 
     p_fiscal_treasury = sub.add_parser(
         "ingest-fiscal-treasury",
@@ -233,6 +242,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_fiscal_treasury.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
     p_fiscal_treasury.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+    p_fiscal_treasury.add_argument(
+        "--from-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Import JSON bodies from this directory instead of fetching (no network). "
+            "Expects avg_interest_rates.json, debt_to_penny.json, mspd_table_1.json"
+        ),
+    )
 
     p_derive_fiscal = sub.add_parser(
         "derive-fiscal",
@@ -523,6 +541,7 @@ def main(argv: list[str] | None = None) -> int:
             data_dir=args.data_dir,
             db_path=args.db,
             force_refresh=args.force_refresh,
+            from_dir=args.from_dir,
         )
         return 0
 
@@ -532,6 +551,7 @@ def main(argv: list[str] | None = None) -> int:
             source_name=args.source,
             data_dir=args.data_dir,
             db_path=args.db,
+            from_dir=args.from_dir,
         )
         return 0
 

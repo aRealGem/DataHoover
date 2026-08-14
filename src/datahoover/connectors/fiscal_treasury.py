@@ -116,6 +116,33 @@ def fetch_paginated(
     return records, raw_pages
 
 
+def load_local_endpoint(from_dir: Path, slug: str) -> List[Dict[str, Any]]:
+    """Read a hand-supplied JSON body for `slug` out of `from_dir`.
+
+    Accepts either shape, so a single raw API response and a copy of this
+    collector's own raw output both work unchanged:
+
+    * ``{"data": [...]}`` — one API response.
+    * ``[{"data": [...]}, ...]`` — a list of pages, which is what
+      `ingest_fiscal_treasury` writes to `data/raw/`.
+
+    Returns the flattened record list. Raises if the file is missing or has no
+    `data` key, rather than quietly yielding zero rows.
+    """
+    path = from_dir / f"{slug}.json"
+    if not path.exists():
+        raise TreasuryEndpointError(f"{slug}: no file at {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    pages = payload if isinstance(payload, list) else [payload]
+
+    records: List[Dict[str, Any]] = []
+    for page in pages:
+        if not isinstance(page, dict) or "data" not in page:
+            raise TreasuryEndpointError(f"{slug}: page in {path} has no 'data' key")
+        records.extend(page["data"])
+    return records
+
+
 def _raw_path(data_dir: Path, source_name: str, slug: str, stamp: datetime) -> Path:
     safe_stamp = stamp.strftime("%Y-%m-%dT%H-%M-%SZ")
     return data_dir / "raw" / source_name / f"treasury_{slug}_{safe_stamp}.json"
@@ -201,8 +228,14 @@ def ingest_fiscal_treasury(
     data_dir: Path,
     db_path: Path,
     throttle: Optional[Throttle] = None,
+    from_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Fetch all three Treasury endpoints and append them to `fiscal_raw_observations`."""
+    """Fetch all three Treasury endpoints and append them to `fiscal_raw_observations`.
+
+    With `from_dir` set, bodies are read from `<slug>.json` in that directory
+    and **no network call is made** — the offline route for an environment
+    whose egress policy blocks `api.fiscaldata.treasury.gov`.
+    """
     sources = load_sources(config_path)
     if source_name not in sources:
         raise SystemExit(
@@ -219,7 +252,13 @@ def ingest_fiscal_treasury(
     run_id = str(uuid.uuid4())
     throttle = throttle if throttle is not None else Throttle()
 
-    summary: Dict[str, Any] = {"requests": 0, "rows": 0, "endpoints": {}, "failures": {}}
+    summary: Dict[str, Any] = {
+        "requests": 0,
+        "imported": 0,
+        "rows": 0,
+        "endpoints": {},
+        "failures": {},
+    }
     all_rows: List[Dict[str, Any]] = []
 
     endpoints = (
@@ -239,15 +278,24 @@ def ingest_fiscal_treasury(
         init_db(db_path)
         for slug, endpoint, params in endpoints:
             try:
-                records, raw_pages = fetch_paginated(
-                    endpoint, params=params, page_size=page_size, throttle=throttle
-                )
+                if from_dir is not None:
+                    records = load_local_endpoint(from_dir, slug)
+                    raw_pages = [{"data": records}]
+                    origin = "import"
+                else:
+                    records, raw_pages = fetch_paginated(
+                        endpoint, params=params, page_size=page_size, throttle=throttle
+                    )
+                    origin = "fetch"
             except Exception as exc:  # noqa: BLE001 - reported, not swallowed
                 summary["failures"][slug] = str(exc)
                 print(f"[{source.name}] FAILED {slug}: {exc}")
                 continue
 
-            summary["requests"] += len(raw_pages)
+            if origin == "import":
+                summary["imported"] += 1
+            else:
+                summary["requests"] += len(raw_pages)
             fetched_at = datetime.now(timezone.utc)
             raw_path = _raw_path(data_dir, source.name, slug, fetched_at)
             raw_path.parent.mkdir(parents=True, exist_ok=True)
@@ -285,7 +333,7 @@ def ingest_fiscal_treasury(
 
             print(
                 f"[{source.name}] {slug}: records={len(records)} pages={len(raw_pages)} "
-                f"projected={summary['endpoints'][slug]} raw={raw_path.name}"
+                f"projected={summary['endpoints'][slug]} {origin} raw={raw_path.name}"
             )
 
         if not summary["endpoints"]:
@@ -304,12 +352,12 @@ def ingest_fiscal_treasury(
             n_new=summary["rows"],
             message=(
                 f"endpoints={len(summary['endpoints'])} requests={summary['requests']} "
-                f"failures={len(summary['failures'])}"
+                f"imported={summary['imported']} failures={len(summary['failures'])}"
             ),
         )
         print(
             f"[{source.name}] appended={summary['rows']} requests={summary['requests']} "
-            f"failures={len(summary['failures'])}"
+            f"imported={summary['imported']} failures={len(summary['failures'])}"
         )
         return summary
     except Exception as exc:

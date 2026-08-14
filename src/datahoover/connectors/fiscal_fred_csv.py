@@ -51,6 +51,23 @@ class FredSeriesUnavailable(RuntimeError):
     """
 
 
+def find_local_series_file(from_dir: Path, series_id: str) -> Optional[Path]:
+    """Locate a hand-supplied CSV for `series_id` inside `from_dir`.
+
+    Two layouts are accepted so that either a manual download or a copy of a
+    warm cache directory works unchanged:
+
+    * ``<SERIES_ID>.csv`` — what you get renaming a `fredgraph.csv` download.
+    * ``fred_<SERIES_ID>_<YYYY-MM-DD>.csv`` — this collector's own cache layout;
+      the newest date wins.
+    """
+    exact = from_dir / f"{series_id}.csv"
+    if exact.exists():
+        return exact
+    matches = sorted(from_dir.glob(f"fred_{series_id}_*.csv"))
+    return matches[-1] if matches else None
+
+
 def cache_path(data_dir: Path, source_name: str, series_id: str, fetch_date: date) -> Path:
     """Raw CSV path, keyed by series ID and fetch date.
 
@@ -124,20 +141,44 @@ def load_or_fetch_series(
     fetch_date: date,
     throttle: Optional[Throttle] = None,
     force_refresh: bool = False,
-) -> Tuple[str, Path, bool]:
-    """Return `(csv_body, raw_path, from_cache)` for one series.
+    from_dir: Optional[Path] = None,
+) -> Tuple[str, Path, str]:
+    """Return `(csv_body, raw_path, origin)` for one series.
 
-    Warm cache means zero requests: if today's file already exists the body is
-    read from disk. That is what makes a same-day re-run free.
+    `origin` is one of:
+
+    * ``"import"`` — read from `from_dir`. **No network call is made at all**,
+      for any series, when `from_dir` is set. A series with no matching file
+      raises rather than silently falling through to a fetch.
+    * ``"cache"`` — today's raw file already existed; zero requests. This is
+      what makes a same-day re-run free.
+    * ``"fetch"`` — went to the network.
+
+    Imported bodies are written to the normal cache path so the audit trail is
+    self-contained: `raw_payload_ref` then points at a file inside `data/raw/`
+    that outlives whatever transient directory supplied it.
     """
     raw_path = cache_path(data_dir, source_name, series_id, fetch_date)
+
+    if from_dir is not None:
+        local = find_local_series_file(from_dir, series_id)
+        if local is None:
+            raise FredSeriesUnavailable(
+                f"{series_id}: no file in {from_dir} "
+                f"(looked for {series_id}.csv and fred_{series_id}_*.csv)"
+            )
+        body = local.read_text(encoding="utf-8")
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_path.write_text(body, encoding="utf-8")
+        return body, raw_path, "import"
+
     if raw_path.exists() and not force_refresh:
-        return raw_path.read_text(encoding="utf-8"), raw_path, True
+        return raw_path.read_text(encoding="utf-8"), raw_path, "cache"
 
     body = fetch_series_csv(series_id, throttle=throttle)
     raw_path.parent.mkdir(parents=True, exist_ok=True)
     raw_path.write_text(body, encoding="utf-8")
-    return body, raw_path, False
+    return body, raw_path, "fetch"
 
 
 def _observation_rows(
@@ -168,11 +209,16 @@ def ingest_fiscal_fred_csv(
     db_path: Path,
     force_refresh: bool = False,
     throttle: Optional[Throttle] = None,
+    from_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Fetch every configured series and append it to `fiscal_raw_observations`.
 
-    Returns a small summary (`requests`, `cached`, `rows`, `failures`) so the
-    verify step can report request counts for a cold vs warm pull.
+    With `from_dir` set, bodies are read from that directory and **no network
+    call is made** — the offline route for an environment whose egress policy
+    blocks `fred.stlouisfed.org`.
+
+    Returns a summary (`requests`, `cached`, `imported`, `rows`, `failures`) so
+    the verify step can report request counts for a cold vs warm pull.
     """
     sources = load_sources(config_path)
     if source_name not in sources:
@@ -194,6 +240,7 @@ def ingest_fiscal_fred_csv(
     summary: Dict[str, Any] = {
         "requests": 0,
         "cached": 0,
+        "imported": 0,
         "rows": 0,
         "series_ok": [],
         "failures": {},
@@ -205,13 +252,14 @@ def ingest_fiscal_fred_csv(
 
         for series_id in series_ids:
             try:
-                body, raw_path, from_cache = load_or_fetch_series(
+                body, raw_path, origin = load_or_fetch_series(
                     series_id,
                     data_dir=data_dir,
                     source_name=source.name,
                     fetch_date=fetch_date,
                     throttle=throttle,
                     force_refresh=force_refresh,
+                    from_dir=from_dir,
                 )
                 parsed = parse_fred_csv(body, series_id)
             except Exception as exc:  # noqa: BLE001 - reported, not swallowed
@@ -219,10 +267,7 @@ def ingest_fiscal_fred_csv(
                 print(f"[{source.name}] FAILED {series_id}: {exc}")
                 continue
 
-            if from_cache:
-                summary["cached"] += 1
-            else:
-                summary["requests"] += 1
+            summary[{"cache": "cached", "import": "imported", "fetch": "requests"}[origin]] += 1
 
             # Guard against an upstream unit change before anything downstream
             # treats the number as trustworthy.
@@ -242,10 +287,7 @@ def ingest_fiscal_fred_csv(
             )
             all_rows.extend(rows)
             summary["series_ok"].append(series_id)
-            print(
-                f"[{source.name}] {series_id}: obs={len(rows)} "
-                f"{'cache' if from_cache else 'fetch'} raw={raw_path.name}"
-            )
+            print(f"[{source.name}] {series_id}: obs={len(rows)} {origin} raw={raw_path.name}")
 
         if not summary["series_ok"]:
             raise RuntimeError(
@@ -265,12 +307,14 @@ def ingest_fiscal_fred_csv(
             n_new=summary["rows"],
             message=(
                 f"series={len(summary['series_ok'])} requests={summary['requests']} "
-                f"cached={summary['cached']} failures={len(summary['failures'])}"
+                f"cached={summary['cached']} imported={summary['imported']} "
+                f"failures={len(summary['failures'])}"
             ),
         )
         print(
             f"[{source.name}] appended={summary['rows']} requests={summary['requests']} "
-            f"cached={summary['cached']} failures={len(summary['failures'])}"
+            f"cached={summary['cached']} imported={summary['imported']} "
+            f"failures={len(summary['failures'])}"
         )
         if summary["failures"]:
             print(f"[{source.name}] unavailable series: {sorted(summary['failures'])}")

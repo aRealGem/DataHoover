@@ -164,17 +164,17 @@ def test_warm_cache_costs_zero_requests(tmp_path, monkeypatch):
     monkeypatch.setattr(fiscal_fred_csv, "get_text", fake_get_text)
     fetch_date = date(2026, 8, 14)
 
-    body, raw_path, from_cache = fiscal_fred_csv.load_or_fetch_series(
+    body, raw_path, origin = fiscal_fred_csv.load_or_fetch_series(
         "GDP", data_dir=tmp_path, source_name="fiscal_fred_core", fetch_date=fetch_date
     )
-    assert from_cache is False
+    assert origin == "fetch"
     assert fetches["n"] == 1
     assert raw_path.exists()
 
-    body2, raw_path2, from_cache2 = fiscal_fred_csv.load_or_fetch_series(
+    body2, raw_path2, origin2 = fiscal_fred_csv.load_or_fetch_series(
         "GDP", data_dir=tmp_path, source_name="fiscal_fred_core", fetch_date=fetch_date
     )
-    assert from_cache2 is True
+    assert origin2 == "cache"
     assert fetches["n"] == 1, "warm cache must not re-request"
     assert body2 == body and raw_path2 == raw_path
 
@@ -196,6 +196,113 @@ def test_force_refresh_bypasses_the_cache(tmp_path, monkeypatch):
             force_refresh=True,
         )
     assert fetches["n"] == 2
+
+
+def test_import_reads_a_plain_series_named_file(tmp_path, monkeypatch):
+    def explode(*args, **kwargs):
+        raise AssertionError("--from-dir must never touch the network")
+
+    monkeypatch.setattr(fiscal_fred_csv, "get_text", explode)
+
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    (incoming / "GDP.csv").write_text(MODERN_CSV, encoding="utf-8")
+
+    body, raw_path, origin = fiscal_fred_csv.load_or_fetch_series(
+        "GDP",
+        data_dir=tmp_path / "data",
+        source_name="fiscal_fred_core",
+        fetch_date=date(2026, 8, 14),
+        from_dir=incoming,
+    )
+    assert origin == "import"
+    assert body == MODERN_CSV
+    # Persisted into the normal raw path, so raw_payload_ref outlives the
+    # transient directory that supplied it.
+    assert raw_path.exists()
+    assert raw_path.read_text(encoding="utf-8") == MODERN_CSV
+
+
+def test_import_also_accepts_the_cache_layout(tmp_path):
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    (incoming / "fred_GDP_2026-08-14.csv").write_text(MODERN_CSV, encoding="utf-8")
+    assert fiscal_fred_csv.find_local_series_file(incoming, "GDP") is not None
+
+
+def test_import_prefix_matching_does_not_confuse_similar_series(tmp_path):
+    """fred_GDPC1_*.csv must not satisfy a request for GDP."""
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    (incoming / "fred_GDPC1_2026-08-14.csv").write_text(MODERN_CSV, encoding="utf-8")
+    assert fiscal_fred_csv.find_local_series_file(incoming, "GDP") is None
+    assert fiscal_fred_csv.find_local_series_file(incoming, "GDPC1") is not None
+
+
+def test_import_picks_the_newest_dated_file(tmp_path):
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    (incoming / "fred_GDP_2026-08-13.csv").write_text("old", encoding="utf-8")
+    (incoming / "fred_GDP_2026-08-14.csv").write_text("new", encoding="utf-8")
+    chosen = fiscal_fred_csv.find_local_series_file(incoming, "GDP")
+    assert chosen is not None and chosen.read_text() == "new"
+
+
+def test_import_raises_on_a_missing_series_rather_than_fetching(tmp_path, monkeypatch):
+    """A gap in the supplied directory must be reported, not silently fetched."""
+    monkeypatch.setattr(
+        fiscal_fred_csv,
+        "get_text",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not fetch")),
+    )
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    with pytest.raises(FredSeriesUnavailable, match="no file in"):
+        fiscal_fred_csv.load_or_fetch_series(
+            "GDP",
+            data_dir=tmp_path / "data",
+            source_name="fiscal_fred_core",
+            fetch_date=date(2026, 8, 14),
+            from_dir=incoming,
+        )
+
+
+def test_treasury_import_accepts_a_single_response_body(tmp_path):
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    (incoming / "debt_to_penny.json").write_text(
+        '{"data": [{"record_date": "2026-07-31", "tot_pub_debt_out_amt": "1.0"}]}',
+        encoding="utf-8",
+    )
+    records = fiscal_treasury.load_local_endpoint(incoming, "debt_to_penny")
+    assert len(records) == 1
+
+
+def test_treasury_import_accepts_a_list_of_pages(tmp_path):
+    """The collector writes a page list to data/raw; that must round-trip back in."""
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    (incoming / "mspd_table_1.json").write_text(
+        '[{"data": [{"record_date": "2026-07-31"}]}, {"data": [{"record_date": "2026-06-30"}]}]',
+        encoding="utf-8",
+    )
+    records = fiscal_treasury.load_local_endpoint(incoming, "mspd_table_1")
+    assert len(records) == 2
+
+
+def test_treasury_import_raises_on_missing_file(tmp_path):
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    with pytest.raises(fiscal_treasury.TreasuryEndpointError, match="no file at"):
+        fiscal_treasury.load_local_endpoint(incoming, "avg_interest_rates")
+
+
+def test_treasury_import_raises_on_a_page_without_data(tmp_path):
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    (incoming / "avg_interest_rates.json").write_text('{"meta": {}}', encoding="utf-8")
+    with pytest.raises(fiscal_treasury.TreasuryEndpointError, match="no 'data' key"):
+        fiscal_treasury.load_local_endpoint(incoming, "avg_interest_rates")
 
 
 def test_cache_key_includes_series_and_fetch_date(tmp_path):

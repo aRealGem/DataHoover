@@ -263,6 +263,11 @@ re-fetch**. `hoover derive-fiscal` rebuilds every derived number and alert from
 with ≥2s spacing and retried on a 5/8/11/14s schedule. A cold pull is 28
 requests; warm (same-day cache) is 0. Do not parallelise.
 
+**Offline import.** Both collectors take `--from-dir`, which reads bodies from a
+directory and makes **zero** network calls — for environments whose egress
+policy blocks the two hosts. Fetch elsewhere, drop the files in, import here.
+See [docs/kanban/wip.md](kanban/wip.md) for the runbook.
+
 **Fiscal-year alignment.** The US FY ended 30 June through FY1976 and 30
 September from FY1977 onward. `fy_quarters()` encodes both regimes; `rg(FY1951)`
 is the regression test that catches a single-regime implementation. The derived
