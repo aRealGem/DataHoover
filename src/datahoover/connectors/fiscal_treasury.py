@@ -189,14 +189,19 @@ def project_mspd_table_1(
         value = _parse_float(record.get("total_mil_amt"))
         if record_date is None or value is None:
             continue
-        label = str(
-            record.get("security_type_desc")
-            or record.get("security_class_desc")
-            or ""
-        ).strip()
-        if label == MSPD_BILLS_LABEL:
+        # The two labels live in different columns: "Bills" is a
+        # ``security_class_desc`` under the "Marketable" type, while "Total
+        # Marketable" is a ``security_type_desc`` summary row (its class is "_").
+        # Coalescing the two fields let the truthy type_desc ("Marketable")
+        # shadow the class ("Bills"), so no bills row ever matched. Match each
+        # label against either descriptor instead.
+        labels = {
+            str(record.get("security_type_desc") or "").strip(),
+            str(record.get("security_class_desc") or "").strip(),
+        }
+        if MSPD_BILLS_LABEL in labels:
             bills.append((record_date, value))
-        elif label == MSPD_TOTAL_MARKETABLE_LABEL:
+        elif MSPD_TOTAL_MARKETABLE_LABEL in labels:
             marketable.append((record_date, value))
     return sorted(bills), sorted(marketable)
 
