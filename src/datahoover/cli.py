@@ -31,6 +31,8 @@ from .connectors.cnn_fear_greed import ingest_cnn_fear_greed
 from .connectors.reddit_subreddit import ingest_reddit_subreddit_json
 from .connectors.stocktwits_symbol import ingest_stocktwits_symbol_stream
 from .connectors.generic_rss import ingest_generic_rss
+from .connectors.fiscal_fred_csv import ingest_fiscal_fred_csv
+from .connectors.fiscal_treasury import ingest_fiscal_treasury
 from .storage.duckdb_store import show_latest
 from .signals import compute_signals, alert_signals
 from .snapshot import snapshot_zip, snapshot_parquet, default_snapshot_stamp
@@ -206,6 +208,59 @@ def build_parser() -> argparse.ArgumentParser:
     p_rss.add_argument("--source", type=str, required=True, help="Source name from sources.toml (kind=generic_rss)")
     p_rss.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
     p_rss.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+
+    p_fiscal_fred = sub.add_parser(
+        "ingest-fiscal-fred",
+        help="Ingest FRED keyless CSV series for the fiscal-sustainability panel (L1)",
+    )
+    p_fiscal_fred.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
+    p_fiscal_fred.add_argument("--source", type=str, default="fiscal_fred_core", help="Source name from sources.toml")
+    p_fiscal_fred.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
+    p_fiscal_fred.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+    p_fiscal_fred.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Ignore the same-day raw cache and re-fetch every series",
+    )
+    p_fiscal_fred.add_argument(
+        "--from-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Import CSV bodies from this directory instead of fetching (no network). "
+            "Accepts <SERIES_ID>.csv or fred_<SERIES_ID>_<date>.csv"
+        ),
+    )
+
+    p_fiscal_treasury = sub.add_parser(
+        "ingest-fiscal-treasury",
+        help="Ingest US Treasury Fiscal Data (keyless) for the fiscal-sustainability panel (L1)",
+    )
+    p_fiscal_treasury.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
+    p_fiscal_treasury.add_argument(
+        "--source", type=str, default="fiscal_treasury_fiscaldata", help="Source name from sources.toml"
+    )
+    p_fiscal_treasury.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
+    p_fiscal_treasury.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+    p_fiscal_treasury.add_argument(
+        "--from-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Import JSON bodies from this directory instead of fetching (no network). "
+            "Expects avg_interest_rates.json, debt_to_penny.json, mspd_table_1.json"
+        ),
+    )
+
+    p_derive_fiscal = sub.add_parser(
+        "derive-fiscal",
+        help="Re-derive the fiscal panel from stored raw (L2) and refresh alert state (L3). No network.",
+    )
+    p_derive_fiscal.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
+    p_derive_fiscal.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+    p_derive_fiscal.add_argument(
+        "--show-alerts", action="store_true", help="Print the L3 alert state table after deriving"
+    )
 
     p_signals = sub.add_parser("compute-signals", help="Compute derived signals from ingested data")
     p_signals.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
@@ -477,6 +532,54 @@ def main(argv: list[str] | None = None) -> int:
             data_dir=args.data_dir,
             db_path=args.db,
         )
+        return 0
+
+    if args.cmd == "ingest-fiscal-fred":
+        ingest_fiscal_fred_csv(
+            config_path=args.config,
+            source_name=args.source,
+            data_dir=args.data_dir,
+            db_path=args.db,
+            force_refresh=args.force_refresh,
+            from_dir=args.from_dir,
+        )
+        return 0
+
+    if args.cmd == "ingest-fiscal-treasury":
+        ingest_fiscal_treasury(
+            config_path=args.config,
+            source_name=args.source,
+            data_dir=args.data_dir,
+            db_path=args.db,
+            from_dir=args.from_dir,
+        )
+        return 0
+
+    if args.cmd == "derive-fiscal":
+        from .fiscal.alerts import format_state_table
+        from .fiscal.store import rebuild_derived
+        from .sources import load_signal_thresholds
+
+        thresholds = load_signal_thresholds(
+            args.config if args.config.exists() else None
+        ).get("fiscal_sustainability", {})
+        panels, states, transitions = rebuild_derived(args.db, thresholds=thresholds)
+        print(
+            f"[fiscal] fiscal_years={len(panels.fiscal_years)} "
+            f"forward_months={len(panels.forward)} treasury_dates={len(panels.treasury)}"
+        )
+        if panels.reconciliation:
+            r = panels.reconciliation
+            difference = r.get("difference_points")
+            print(
+                f"[fiscal] b(FY{r['fiscal_year']}) derived={r['derived_b_percent']:.1f}% "
+                f"published={r['published_b_percent']:.1f}% "
+                f"diff={difference:+.2f}pp within_tolerance={r['within_tolerance']}"
+            )
+        for transition in transitions:
+            print(f"[fiscal] {transition.format()}")
+        if args.show_alerts:
+            print(format_state_table(states))
         return 0
 
     if args.cmd == "compute-signals":

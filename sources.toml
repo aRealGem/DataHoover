@@ -294,6 +294,58 @@ redistribute = "public-domain"
 purpose = "raw_only"
 
 # --------------------------------------------------------------------------- #
+# US fiscal sustainability (keyless). Feeds the fiscal_sustainability producer
+# via the L1 -> L2 -> L3 chain in `src/datahoover/fiscal/`.
+#
+# These use the keyless FRED CSV endpoint (`fredgraph.csv`), not the keyed JSON
+# API the `fred_series` connector uses — no API key is involved anywhere in
+# this lane. Series are split across three blocks so a rate-limited cold pull
+# can be run one block at a time.
+# --------------------------------------------------------------------------- #
+
+[[sources]]
+name = "fiscal_fred_core"
+kind = "fiscal_fred_csv"
+url = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+description = "FRED national accounts, fiscal levels/ratios, debt ratios, interest and defence outlays for the US fiscal-sustainability panel. Keyless CSV endpoint."
+license = "mixed-fred"
+redistribute = "with-attribution"
+series_ids = [
+    "GDP", "GDPC1", "GDPDEF", "GDPPOT", "CPIAUCSL",
+    "FYGFDPUB", "FYGFD", "FYOINT", "FYFSD",
+    "FYPUGDA188S", "GFDGDPA188S", "FYOIGDA188S", "FYFSGDA188S",
+    "GFDEGDQ188S", "FYGFGDQ188S", "GFDEBTN", "FYGFDPUN",
+    "A091RC1Q027SBEA", "FDEFX",
+]
+
+[[sources]]
+name = "fiscal_fred_rates"
+kind = "fiscal_fred_csv"
+url = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+description = "FRED 10-year rate complex for the forward r-g test: nominal, TIPS real, breakeven, term premium, and the Cleveland Fed expected-inflation series."
+license = "mixed-fred"
+redistribute = "with-attribution"
+series_ids = ["GS10", "DGS10", "DFII10", "T10YIE", "THREEFYTP10", "EXPINF10YR"]
+
+[[sources]]
+name = "fiscal_fred_holders"
+kind = "fiscal_fred_csv"
+url = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+description = "FRED holders of federal debt (financial institutions, Federal Reserve banks, private investors). Raw-only context for the fiscal panel."
+license = "mixed-fred"
+redistribute = "with-attribution"
+series_ids = ["FDHBFIN", "FDHBFRBN", "FDHBPIN"]
+
+[[sources]]
+name = "fiscal_treasury_fiscaldata"
+kind = "fiscal_treasury"
+url = "https://api.fiscaldata.treasury.gov/services/api/fiscal_service"
+description = "US Treasury Fiscal Data (keyless): average interest rate on total interest-bearing debt, debt to the penny, and MSPD table 1 for the bill share."
+license = "PD-USGov"
+redistribute = "public-domain"
+page_size = 1000
+
+# --------------------------------------------------------------------------- #
 # Signal producer thresholds. Keys not present here fall back to the defaults
 # in `SIGNAL_THRESHOLD_DEFAULTS` in `src/datahoover/sources.py`.
 # --------------------------------------------------------------------------- #
@@ -317,3 +369,16 @@ severity_denominator = 0.10
 min_articles = 5
 min_abs_avg_tone = 1.0
 severity_denominator = 5.0
+
+# A1 realised r-g adverse; A2 forward r-g adverse (both measures must agree);
+# A3 joint tripwire (A2 + debt level, binary, never fired FY1949-FY2025);
+# A4 refi pressure (level test); A5 persistent debt drift.
+# `disagreement_limit_pp` gates whether the forward reading is decision-grade.
+[signals.fiscal_sustainability]
+a1_consecutive_years = 3
+a2_consecutive_months = 3
+a3_debt_ratio = 0.80
+a4_marg_minus_avg_pp = 1.0
+a5_drift_points = 2.0
+a5_trailing_years = 3
+disagreement_limit_pp = 0.20
