@@ -229,6 +229,82 @@ Each pipeline is: one or more raw sources → one producer function → rows in 
 - `gdelt_democracy_timelinetone` — GDELT 2.0 doc API `mode=timelinetone` (15-min bucket aggregate tone over the query window). The cheap, recommended source for tone — one HTTP call per ingest.
 - `gdelt_gkg_15min` — GDELT 2.0 GKG latest 15-min CSV drop (per-article V2Tone, V2Themes, V2Persons/Locations/Organizations stashed in `raw_row_json` for later re-parsing). High volume (~50–150 MB unzipped per drop).
 
+### 10. US fiscal sustainability → `_fiscal_sustainability_signals` (`signal_type`: `fiscal_sustainability`)
+
+*Unlike every other pipeline, this one is **three explicit layers** rather than
+raw → producer. The producer only surfaces already-decided alert state.*
+
+```
+L1 collector  fetch, timestamp, persist raw. Computes NOTHING.
+L2 derive     all formulas. Pure functions over L1. Fully recomputable from raw.
+L3 alerts     thresholds + persistence state. Reads L2 only.
+```
+
+The point of the split is that **a definition change is a re-derive, never a
+re-fetch**. `hoover derive-fiscal` rebuilds every derived number and alert from
+`fiscal_raw_observations` without touching the network.
+
+| Layer | Module | Table |
+|-------|--------|-------|
+| L1 | [`connectors/fiscal_fred_csv.py`](../src/datahoover/connectors/fiscal_fred_csv.py), [`connectors/fiscal_treasury.py`](../src/datahoover/connectors/fiscal_treasury.py) | `fiscal_raw_observations` (**append-only**) |
+| L2 | [`fiscal/fy.py`](../src/datahoover/fiscal/fy.py), [`fiscal/derive.py`](../src/datahoover/fiscal/derive.py) | `fiscal_derived` (fully rebuildable) |
+| L3 | [`fiscal/alerts.py`](../src/datahoover/fiscal/alerts.py) | `fiscal_alert_state`, `fiscal_alert_log` |
+
+**Sources** (all keyless — no API key anywhere in this lane):
+
+- `fiscal_fred_core`, `fiscal_fred_rates`, `fiscal_fred_holders` — FRED
+  **keyless CSV** endpoint (`fredgraph.csv`). Deliberately *not* the
+  `fred_series` connector, which uses the keyed JSON API and upserts
+  destructively into `fred_series_observations`.
+- `fiscal_treasury_fiscaldata` — Treasury Fiscal Data API (avg interest rates,
+  debt to the penny, MSPD table 1).
+
+**Rate limit.** `fredgraph.csv` 503s at roughly 1 req/s. Requests are serialised
+with ≥2s spacing and retried on a 5/8/11/14s schedule. A cold pull is 28
+requests; warm (same-day cache) is 0. Do not parallelise.
+
+**Fiscal-year alignment.** The US FY ended 30 June through FY1976 and 30
+September from FY1977 onward. `fy_quarters()` encodes both regimes; `rg(FY1951)`
+is the regression test that catches a single-regime implementation. The derived
+panel starts at FY1949 (quarterly GDP starts 1947Q1, and the growth rate needs
+the prior FY).
+
+**Derivations.** `r_eff`, `g_nom`, `rg`, `b`, `prim`, `stab`, `drift` on a
+fiscal-year grid (stored as fractions); a monthly forward r−g test computed
+**two ways** (TIPS-based and model-based); `marg_minus_avg`; `bill_share`.
+
+**UNIT GUARD U1** — `derive.r_minus_g()` raises rather than warns when the two
+terms are not comparable: mixed units, or a nominal rate against a real growth
+rate. That last case is not theoretical — it flips the sign of r−g on current
+data. The one documented exception is the forward test, which pairs a CPI-linked
+real yield against GDP-deflator real potential growth; that wedge must be opted
+into with `allow_deflator_wedge=True` and is recorded on the result.
+
+**Two measures, never averaged.** `fwd_rg_tips` and `fwd_rg_model` are both
+computed and reported. When they disagree by more than 0.20 pp the forward
+reading is flagged **not decision-grade** (alert `D1`) rather than resolved into
+a midpoint.
+
+**Debt ratio, two constructions.** FRED's published `FYPUGDA188S` is canonical
+for *level* reporting (and is what alert A3 tests); the derived `b` is used only
+inside `stab()`. They differ by roughly a point because of the FY-GDP
+denominator construction — `reconcile_debt_ratio()` asserts a 2.0 pp tolerance
+and logs the gap rather than asserting equality.
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| `A1` | `rg(y) > 0` for 3 consecutive fiscal years | medium |
+| `A2` | `fwd_rg_tips` **and** `fwd_rg_model` both > 0 for 3 consecutive months | high |
+| `A3` | A2's condition true **and** debt/GDP > 80%. Binary, not percentile — never fired FY1949–FY2025 | critical |
+| `A4` | `marg_minus_avg > +1.0` pp (a level test, not a change test) | medium |
+| `A5` | 3-year trailing mean of `drift` > +2.0 points of GDP per year | medium |
+| `D1` | `abs(fwd_rg_tips − fwd_rg_model) > 0.20` pp — forward reading not decision-grade | medium |
+
+**Out of scope** (separate cards): ALFRED vintage-aware fetching — that belongs
+to truth-bot, which owns citation-grade as-of-date values; this collector owns
+latest-value series for analysis. Also out of scope: weighted average maturity
+(needs MSPD table 3), and any dashboard layer.
+
 ## Producer registry
 
 `compute_signals` iterates `signals.PRODUCERS`, a module-level ordered list of `(name, adapter)` pairs. Each adapter has the uniform signature `(con, *, cutoff, computed_at, **config) -> list[SignalRow]` and delegates to the underlying producer function. New producers append to this list in commit order.
