@@ -576,6 +576,33 @@ def main(argv: list[str] | None = None) -> int:
                 f"published={r['published_b_percent']:.1f}% "
                 f"diff={difference:+.2f}pp within_tolerance={r['within_tolerance']}"
             )
+        if panels.forward:
+            from .fiscal.derive import (
+                FORWARD_DEFLATOR_WEDGE_BASIS,
+                FORWARD_DEFLATOR_WEDGE_MEAN_PP,
+                FORWARD_DEFLATOR_WEDGE_SD_PP,
+            )
+
+            latest_fwd = panels.forward[-1]
+            readings = [
+                v
+                for v in (latest_fwd.fwd_rg_tips, latest_fwd.fwd_rg_model)
+                if v is not None
+            ]
+            largest = max((abs(v) for v in readings), default=0.0)
+            print(
+                f"[fiscal] forward deflator wedge (CPI|GDPDEF): "
+                f"{FORWARD_DEFLATOR_WEDGE_MEAN_PP:+.3f}pp mean, "
+                f"sd {FORWARD_DEFLATOR_WEDGE_SD_PP:.3f}pp "
+                f"[{FORWARD_DEFLATOR_WEDGE_BASIS}]"
+            )
+            if largest and FORWARD_DEFLATOR_WEDGE_MEAN_PP >= largest:
+                print(
+                    f"[fiscal] WEDGE EXCEEDS SIGNAL: |forward r-g| max "
+                    f"{largest:.4f}pp <= wedge bias "
+                    f"{FORWARD_DEFLATOR_WEDGE_MEAN_PP:.3f}pp — forward sign is "
+                    f"NOT determinate; read direction from the realised panel"
+                )
         for transition in transitions:
             print(f"[fiscal] {transition.format()}")
         if args.show_alerts:

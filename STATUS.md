@@ -40,6 +40,15 @@ forward reading is correctly flagged **not decision-grade**).
 Full suite on this branch: **294 passed, 3 failed, 2 skipped** — the three
 failures are pre-existing `tests/test_env.py` missing-API-key assertions
 (BLS / Census / truth-bot ingest), unrelated to the fiscal lane.
+
+**Deflator wedge ruled (2026-09-16).** The one open owner decision is closed.
+The CPI-vs-GDP-deflator wedge was measured (FRED `CPIAUCSL` vs `GDPDEF`,
+1986-2025: mean +0.426 pp, sd 0.554 pp) and turns out to be **larger than the
+forward r−g reading it contaminates**. `allow_deflator_wedge` stays as an
+explicit opt-in, the measured band is now carried in code, and the forward sign
+is never presented as determinate — `derive-fiscal` prints a `WEDGE EXCEEDS
+SIGNAL` line when the bias dominates. See
+[docs/architecture.md](docs/architecture.md) for the full ruling.
 See [docs/kanban/wip.md](docs/kanban/wip.md) for the runbook.
 
 **Incidental:** `feedparser` now installs cleanly on Py 3.11 (6.0.14 ships a

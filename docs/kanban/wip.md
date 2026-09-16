@@ -87,14 +87,31 @@ See [architecture.md § pipeline 10](../architecture.md) for the full design.
   `requests=0`, `derive-fiscal` built a 78-year panel and 536 forward months,
   and the golden harness switched from skipped to executing and asserting.
 
-**Open decision**
+**Deflator wedge — RULED 2026-09-16 (owner-approved)**
 
 - The forward test pairs a CPI-linked real yield (TIPS / DGS10 − EXPINF10YR)
   against GDP-deflator real potential growth. Strictly that is the deflator
   mismatch U1 exists to catch, but the spec mandates both the formula and the
-  guard. Current resolution: U1 raises on nominal-vs-real unconditionally, and
-  the deflator wedge requires an explicit `allow_deflator_wedge=True` that is
-  recorded on the result. Worth an owner ruling.
+  guard.
+
+- **Measured, not assumed.** FRED `CPIAUCSL` vs `GDPDEF`, annual averages
+  1986-2025 (n=40): mean **+0.426 pp**, sd **0.554 pp**, range -0.93 to
+  +1.88 pp, sign-changing. 29/40 years exceed 0.20 pp; 18/40 exceed 0.50 pp.
+  The old in-code description ("small and stable, a few tenths of a point") was
+  right on magnitude and **wrong on stability** — the sd exceeds the mean.
+
+- **Ruling.** Keep `allow_deflator_wedge` as an explicit opt-in; it is the
+  correct mechanism and U1 continues to raise unconditionally on nominal-vs-real.
+  Additionally: the wedge is now carried as a stated bias band
+  (`FORWARD_DEFLATOR_WEDGE_MEAN_PP` / `_SD_PP` / `_BASIS`), and because that
+  band is **larger than current forward r−g readings**, the forward sign must
+  never be presented as determinate. `derive-fiscal` prints a `WEDGE EXCEEDS
+  SIGNAL` line whenever the bias is at least as large as the largest forward
+  reading. Direction should be read from the realised panel, which has no wedge.
+
+- **Not fixed, deliberately.** A proper correction needs a GDP-deflator-based
+  10-year expected-inflation series. None exists free. Disclosure beats a
+  fabricated adjustment, so the wedge is surfaced rather than silently netted out.
 
 **Consolidation trigger (recorded, not actioned)**
 

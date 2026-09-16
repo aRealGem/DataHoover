@@ -285,6 +285,26 @@ data. The one documented exception is the forward test, which pairs a CPI-linked
 real yield against GDP-deflator real potential growth; that wedge must be opted
 into with `allow_deflator_wedge=True` and is recorded on the result.
 
+**Deflator-wedge ruling (2026-09-16).** The wedge was measured rather than
+assumed: FRED `CPIAUCSL` vs `GDPDEF`, annual averages 1986-2025 (n=40) give a
+mean of **+0.426 pp** with a **standard deviation of 0.554 pp**, ranging -0.93
+to +1.88 pp and changing sign. 29 of 40 years exceed 0.20 pp and 18 exceed
+0.50 pp. The code previously called this "small and stable (a few tenths of a
+point)" — the magnitude was about right, the stability was not.
+
+The consequence is the load-bearing part: **the wedge is larger than the signal
+it contaminates.** Its mean alone is more than twice the 0.20 pp disagreement
+limit, and it exceeds the magnitude of current forward r−g readings. The ruling
+is therefore to (a) keep `allow_deflator_wedge` as an explicit opt-in, which is
+the right mechanism, (b) carry the measured band as a floor on forward r−g
+uncertainty via `FORWARD_DEFLATOR_WEDGE_MEAN_PP` / `_SD_PP`, and (c) **never
+present the forward r−g sign as determinate** while the wedge stands —
+`derive-fiscal` now prints an explicit `WEDGE EXCEEDS SIGNAL` line when the
+bias is at least as large as the largest forward reading, and directs the reader
+to the realised panel for direction. Correcting the wedge properly would need a
+GDP-deflator-based expected-inflation series at a 10-year horizon, which does
+not exist in free form — so it is disclosed, not silently fixed.
+
 **Two measures, never averaged.** `fwd_rg_tips` and `fwd_rg_model` are both
 computed and reported. When they disagree by more than 0.20 pp the forward
 reading is flagged **not decision-grade** (alert `D1`) rather than resolved into

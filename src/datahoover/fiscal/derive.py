@@ -162,9 +162,19 @@ def r_minus_g(r: Rate, g: Rate, *, allow_deflator_wedge: bool = False) -> Rate:
     The wedge escape hatch exists for one specific, documented pairing: the
     forward test compares a CPI-linked real yield (TIPS, or DGS10 less the
     Cleveland Fed CPI expectation) against real potential-GDP growth, which is
-    on a GDP-deflator basis. That wedge is real but small and stable (a few
-    tenths of a point), unlike the nominal/real confusion, which is not. It is
-    recorded on the result rather than hidden.
+    on a GDP-deflator basis.
+
+    That wedge was previously described here as "small and stable (a few tenths
+    of a point)". Measured 2026-09-16 against FRED CPIAUCSL vs GDPDEF (annual
+    averages, 1986-2025, n=40) the magnitude claim holds but the stability claim
+    does not: mean +0.426pp, **standard deviation 0.554pp**, range -0.93 to
+    +1.88pp, and it changes sign. See FORWARD_DEFLATOR_WEDGE_MEAN_PP.
+
+    This matters because the wedge is not small relative to the thing being
+    measured. Its mean alone is more than twice MEASURE_DISAGREEMENT_LIMIT_PP,
+    and it exceeds the magnitude of current forward r-g readings. The wedge is
+    still recorded on the result rather than hidden, but a forward r-g computed
+    across it must not be read as sign-determinate.
     """
     if r.units != g.units:
         raise UnitGuardError(
@@ -515,6 +525,21 @@ def reconcile_debt_ratio(row: FiscalYearRow, *, tolerance_points: float = 2.0) -
 # potential growth. See `r_minus_g` — the wedge is acknowledged, not hidden.
 FORWARD_RATE_DEFLATOR = "CPI"
 FORWARD_GROWTH_DEFLATOR = "GDPDEF"
+
+# Owner ruling 2026-09-16 (deflator-wedge decision). Measured from FRED
+# CPIAUCSL vs GDPDEF, annual averages, 1986-2025 (n=40):
+#   mean +0.426pp   sd 0.554pp   range -0.93 .. +1.88pp
+#   29/40 years exceed 0.20pp, 18/40 exceed 0.50pp, and the sign flips.
+# The bias injected by pairing a CPI-deflated yield with GDP-deflator growth is
+# therefore LARGER than MEASURE_DISAGREEMENT_LIMIT_PP and larger than current
+# forward r-g readings. Ruling: keep allow_deflator_wedge as an explicit opt-in
+# (it is the right mechanism), but treat this band as a floor on forward r-g
+# uncertainty and never present the forward sign as determinate. Correcting the
+# wedge properly needs a GDP-deflator-based expected-inflation series, which
+# does not exist free at this horizon - so it is disclosed, not silently fixed.
+FORWARD_DEFLATOR_WEDGE_MEAN_PP = 0.426
+FORWARD_DEFLATOR_WEDGE_SD_PP = 0.554
+FORWARD_DEFLATOR_WEDGE_BASIS = "FRED CPIAUCSL vs GDPDEF, annual, 1986-2025"
 
 # Below this the two forward measures agree well enough to read as one number.
 MEASURE_DISAGREEMENT_LIMIT_PP = 0.20
