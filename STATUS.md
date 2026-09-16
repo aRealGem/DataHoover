@@ -1,6 +1,6 @@
 # DataHoover Status — 2026-08-14 (Fri)
 
-_Last working session: 2026-08-14 — US fiscal-sustainability collector built on `claude/fiscal-sustainability-collector-vv3oar`: three-layer deterministic ETL (L1 collect / L2 derive / L3 alert) over keyless FRED CSV + Treasury Fiscal Data. Code and unit tests complete; **golden values unverified — both data hosts are blocked by the session egress policy.**_
+_Last working session: 2026-08-14 — US fiscal-sustainability collector built on `claude/fiscal-sustainability-collector-vv3oar`: three-layer deterministic ETL (L1 collect / L2 derive / L3 alert) over keyless FRED CSV + Treasury Fiscal Data. Code and unit tests complete; **golden values VERIFIED live on 2026-09-16 — all 10 golden tests pass.**_
 
 ## 2026-08-14 — fiscal-sustainability collector
 
@@ -22,10 +22,25 @@ New pipeline #10 in [docs/architecture.md](docs/architecture.md). Highlights:
 - **Forward r−g is computed two ways and never averaged.** When TIPS and model
   disagree past 0.20 pp the reading is flagged not decision-grade (alert D1).
 
-**Blocked:** `fred.stlouisfed.org` and `api.fiscaldata.treasury.gov` both return
-403 at CONNECT under this environment's network policy, so no live pull has
-happened. The golden-value tests exist and skip with an explicit "NOT VERIFIED"
-reason. See [docs/kanban/wip.md](docs/kanban/wip.md) for the unblock runbook.
+**Unblocked and verified (2026-09-16).** The egress block has cleared —
+`fred.stlouisfed.org` and `api.fiscaldata.treasury.gov` both return HTTP 200
+from SandboxPi. Route A of the runbook was run end to end: 23 FRED series and
+3 Treasury endpoints ingested with **zero failures**, `derive-fiscal` built a
+**77-year panel / 537 forward months / 308 Treasury dates**, and
+`tests/test_fiscal_golden.py` went from skipped to **10 passed**.
+
+Every golden value landed inside tolerance, including the FY1976/77 pivot
+regression `rg(FY1951) = -15.2018` (expected -15.2, ±0.2) and an exact match on
+the Treasury average rate for 2026-07-31 (3.447%). FY2025 reconciliation:
+derived 99.36% vs published 98.07%, **+1.29pp inside the ±2.0pp tolerance**.
+Two alerts fire on current data — **A4** (marginal funding cost exceeds average
+by +1.014pp) and **D1** (forward r-g measures disagree by 0.2104pp, so the
+forward reading is correctly flagged **not decision-grade**).
+
+Full suite on this branch: **294 passed, 3 failed, 2 skipped** — the three
+failures are pre-existing `tests/test_env.py` missing-API-key assertions
+(BLS / Census / truth-bot ingest), unrelated to the fiscal lane.
+See [docs/kanban/wip.md](docs/kanban/wip.md) for the runbook.
 
 **Incidental:** `feedparser` now installs cleanly on Py 3.11 (6.0.14 ships a
 wheel; `sgmllib3k` is no longer a build dependency). The `run-all-tests.sh`

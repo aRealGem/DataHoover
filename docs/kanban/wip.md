@@ -26,13 +26,18 @@ See [architecture.md § pipeline 10](../architecture.md) for the full design.
 - 100 tests covering FY alignment, formulas, the unit guard, alerts, collector
   caching/throttling/pagination, and a re-derive-from-raw proof.
 
-**Blocked — needs the owner**
+**Golden values VERIFIED — 2026-09-16**
 
-- **Golden values are NOT VERIFIED.** `fred.stlouisfed.org` and
-  `api.fiscaldata.treasury.gov` are both blocked by the session egress policy
-  (403 at CONNECT). Every golden-value test is written and will run the moment
-  raw data lands; until then they **skip with a reason** rather than reporting
-  a misleading green.
+- **All 10 golden tests pass against live data.** The egress block that stalled
+  this lane has cleared: both hosts now return HTTP 200 from SandboxPi. Route A
+  below was run end to end — 23 FRED series + 3 Treasury endpoints, zero
+  failures; 77 fiscal years, 537 forward months, 308 Treasury dates derived.
+  Reconciliation FY2025 derived 99.36% vs published 98.07% (+1.29pp, tolerance
+  ±2.0pp). Alerts A4 and D1 fire on current data, D1 correctly marking the
+  forward reading not decision-grade.
+
+  The runbook below is retained as the reproduction procedure. Route B remains
+  the fallback if the egress policy tightens again.
 
   *Route A — unblock the hosts,* then:
 
