@@ -25,6 +25,11 @@ def test_get_secret_reads_env_file(monkeypatch, tmp_path: Path):
     fake_env = tmp_path / "test.env"
     fake_env.write_text("FRED_API_KEY=fake-key")
     monkeypatch.setenv("DATAHOOVER_ENV_FILE", str(fake_env))
+    # get_secret prefers the process env (see test_get_secret_prefers_process_env),
+    # so a real exported FRED_API_KEY would shadow the file and this test would
+    # assert the wrong path. The weekly runner exports exactly that, which made
+    # this test pass only in a bare shell. Sibling test below already does this.
+    monkeypatch.delenv("FRED_API_KEY", raising=False)
     assert env.get_secret("FRED_API_KEY") == "fake-key"
 
 
