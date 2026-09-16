@@ -34,4 +34,5 @@ where = ["src"]
 pythonpath = ["src"]
 markers = [
   "network: requires network access",
+  "golden: fiscal golden-value test; needs a populated fiscal_raw_observations (skips otherwise)",
 ]

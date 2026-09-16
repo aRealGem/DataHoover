@@ -1,6 +1,60 @@
-# DataHoover Status — 2026-06-29 (Mon)
+# DataHoover Status — 2026-08-14 (Fri)
 
-_Last working session: 2026-06-29 — Iran war dashboard refreshed and republished to ExpressionPi as an additive `2026-06-28/` drop alongside the original 2026-05-02 PDFs._
+_Last working session: 2026-08-14 — US fiscal-sustainability collector built on `claude/fiscal-sustainability-collector-vv3oar`: three-layer deterministic ETL (L1 collect / L2 derive / L3 alert) over keyless FRED CSV + Treasury Fiscal Data. Code and unit tests complete; **golden values VERIFIED live on 2026-09-16 — all 10 golden tests pass.**_
+
+## 2026-08-14 — fiscal-sustainability collector
+
+New pipeline #10 in [docs/architecture.md](docs/architecture.md). Highlights:
+
+- **Strict layering.** L1 (`fiscal_raw_observations`, append-only) computes
+  nothing; L2 (`fiscal_derived`) is pure functions over raw; L3
+  (`fiscal_alert_state` / `fiscal_alert_log`) reads L2 only. A definition change
+  is a re-derive, never a re-fetch — proven by a test that wipes the derived
+  store and rebuilds identical numbers from raw.
+- **Keyless throughout.** Uses `fredgraph.csv`, not the keyed JSON API. No
+  secret is read, stored, or logged anywhere in this lane. The existing
+  `fred_series` connector is untouched and still keyed — the duplication is
+  deliberate.
+- **FY alignment.** The 30 June → 30 September pivot at FY1976/77 is encoded
+  explicitly; `rg(FY1951)` is the regression test.
+- **Unit guard U1 raises, not warns**, on any r−g that mixes units or price
+  bases. On current data that error flips the sign.
+- **Forward r−g is computed two ways and never averaged.** When TIPS and model
+  disagree past 0.20 pp the reading is flagged not decision-grade (alert D1).
+
+**Unblocked and verified (2026-09-16).** The egress block has cleared —
+`fred.stlouisfed.org` and `api.fiscaldata.treasury.gov` both return HTTP 200
+from SandboxPi. Route A of the runbook was run end to end: 23 FRED series and
+3 Treasury endpoints ingested with **zero failures**, `derive-fiscal` built a
+**77-year panel / 537 forward months / 308 Treasury dates**, and
+`tests/test_fiscal_golden.py` went from skipped to **10 passed**.
+
+Every golden value landed inside tolerance, including the FY1976/77 pivot
+regression `rg(FY1951) = -15.2018` (expected -15.2, ±0.2) and an exact match on
+the Treasury average rate for 2026-07-31 (3.447%). FY2025 reconciliation:
+derived 99.36% vs published 98.07%, **+1.29pp inside the ±2.0pp tolerance**.
+Two alerts fire on current data — **A4** (marginal funding cost exceeds average
+by +1.014pp) and **D1** (forward r-g measures disagree by 0.2104pp, so the
+forward reading is correctly flagged **not decision-grade**).
+
+Full suite on this branch: **294 passed, 3 failed, 2 skipped** — the three
+failures are pre-existing `tests/test_env.py` missing-API-key assertions
+(BLS / Census / truth-bot ingest), unrelated to the fiscal lane.
+
+**Deflator wedge ruled (2026-09-16).** The one open owner decision is closed.
+The CPI-vs-GDP-deflator wedge was measured (FRED `CPIAUCSL` vs `GDPDEF`,
+1986-2025: mean +0.426 pp, sd 0.554 pp) and turns out to be **larger than the
+forward r−g reading it contaminates**. `allow_deflator_wedge` stays as an
+explicit opt-in, the measured band is now carried in code, and the forward sign
+is never presented as determinate — `derive-fiscal` prints a `WEDGE EXCEEDS
+SIGNAL` line when the bias dominates. See
+[docs/architecture.md](docs/architecture.md) for the full ruling.
+See [docs/kanban/wip.md](docs/kanban/wip.md) for the runbook.
+
+**Incidental:** `feedparser` now installs cleanly on Py 3.11 (6.0.14 ships a
+wheel; `sgmllib3k` is no longer a build dependency). The `run-all-tests.sh`
+`--ignore` workaround for `test_gdacs_parse.py` / `test_signals_compute.py` may
+no longer be needed — worth re-checking before the next session.
 
 This page is the 30-second "where did we leave off" view. Deep architecture detail lives in [docs/architecture.md](docs/architecture.md); the work queue lives in [docs/kanban/](docs/kanban/).
 

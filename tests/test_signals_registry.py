@@ -22,6 +22,7 @@ def test_registry_names_and_order_match_docs():
         "weather_alert",
         "disaster_declaration",
         "sentiment_tone",
+        "fiscal_sustainability",
     ]
 
 
@@ -57,6 +58,7 @@ def test_compute_signals_invokes_every_registered_producer(monkeypatch, tmp_path
         ("weather_alert", fake("weather_alert")),
         ("disaster_declaration", fake("disaster_declaration")),
         ("sentiment_tone", fake("sentiment_tone")),
+        ("fiscal_sustainability", fake("fiscal_sustainability")),
     ]
     monkeypatch.setattr(signals_module, "PRODUCERS", spy_registry)
 
@@ -78,4 +80,5 @@ def test_compute_signals_invokes_every_registered_producer(monkeypatch, tmp_path
         "weather_alert",
         "disaster_declaration",
         "sentiment_tone",
+        "fiscal_sustainability",
     ]

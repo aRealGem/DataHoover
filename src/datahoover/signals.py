@@ -1025,6 +1025,109 @@ ProducerFn = Callable[..., List[Dict[str, Any]]]
 # Mapping of producer name -> source names in sources.toml that feed it.
 # Consumed by the source-contract test in tests/test_sources_contract.py.
 # New producers must add their source names here in the same commit.
+def _fiscal_sustainability_signals(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    cutoff: datetime,
+    computed_at: datetime,
+) -> List[Dict[str, Any]]:
+    """Fiscal-sustainability alert state -> `fiscal_sustainability` signals.
+
+    Reads the L3 output in `fiscal_alert_state` rather than recomputing
+    anything: the thresholds, persistence counts and severities are all decided
+    in `datahoover.fiscal.alerts`, and this producer only surfaces the fired
+    ones on the shared `signals` table. Run `hoover derive-fiscal` first.
+
+    Cleared alerts are not emitted — `signals` is a record of things that fired,
+    and the full state table (including non-fired alerts) lives in
+    `fiscal_alert_state` and `hoover fiscal-alerts`.
+    """
+    if not con.execute(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'fiscal_alert_state'"
+    ).fetchone()[0]:
+        return []
+    rows = con.execute(
+        """
+        SELECT alert_id, severity, description, fired, consecutive_periods,
+               required_periods, current_value, threshold, period_kind,
+               latest_period, evaluated_at_utc, detail_json
+        FROM fiscal_alert_state
+        WHERE fired
+        ORDER BY alert_id
+        """
+    ).fetchall()
+
+    signals: List[Dict[str, Any]] = []
+    for (
+        alert_id,
+        severity,
+        description,
+        _fired,
+        consecutive_periods,
+        required_periods,
+        current_value,
+        threshold,
+        period_kind,
+        latest_period,
+        evaluated_at_utc,
+        detail_json,
+    ) in rows:
+        score = _FISCAL_SEVERITY_SCORES.get(severity, 0.5)
+        summary = f"{alert_id}: {description}"
+        if current_value is not None:
+            summary += f" (value={current_value:.4g}"
+            if threshold is not None:
+                summary += f", threshold={threshold:.4g}"
+            summary += ")"
+        details = {
+            "alert_id": alert_id,
+            "severity": severity,
+            "consecutive_periods": consecutive_periods,
+            "required_periods": required_periods,
+            "current_value": current_value,
+            "threshold": threshold,
+            "period_kind": period_kind,
+            "latest_period": latest_period,
+            "alert_detail": json.loads(detail_json) if detail_json else {},
+        }
+        payload = {
+            "signal_type": "fiscal_sustainability",
+            "source": "fiscal_sustainability",
+            "entity_type": "us_federal_fiscal",
+            "entity_id": alert_id,
+            "ts_start": str(latest_period),
+            "summary": summary,
+        }
+        signals.append(
+            {
+                "signal_id": _signal_id(payload),
+                "signal_type": "fiscal_sustainability",
+                "source": "fiscal_sustainability",
+                "entity_type": "us_federal_fiscal",
+                "entity_id": alert_id,
+                "ts_start": evaluated_at_utc,
+                "ts_end": None,
+                "severity_score": score,
+                "summary": summary,
+                "details_json": json.dumps(details, separators=(",", ":"), ensure_ascii=False, default=str),
+                "ingested_at": evaluated_at_utc,
+                "computed_at": computed_at,
+                "raw_paths": json.dumps([]),
+            }
+        )
+    return signals
+
+
+# Severity label -> 0..1 score for the shared `signals` table. Mirrors
+# `datahoover.fiscal.alerts.SEVERITY_SCORES`, kept local so `signals.py` does
+# not import the fiscal package at module load.
+_FISCAL_SEVERITY_SCORES: Dict[str, float] = {
+    "medium": 0.5,
+    "high": 0.75,
+    "critical": 1.0,
+}
+
+
 PRODUCER_SOURCES: Dict[str, List[str]] = {
     "earthquake": ["usgs_all_day", "usgs_catalog_m45_day"],
     "gdacs": ["gdacs_alerts"],
@@ -1042,6 +1145,12 @@ PRODUCER_SOURCES: Dict[str, List[str]] = {
         "gdelt_democracy_24h",
         "gdelt_democracy_timelinetone",
         "gdelt_gkg_15min",
+    ],
+    "fiscal_sustainability": [
+        "fiscal_fred_core",
+        "fiscal_fred_rates",
+        "fiscal_fred_holders",
+        "fiscal_treasury_fiscaldata",
     ],
 }
 
@@ -1108,6 +1217,12 @@ PRODUCERS: List[tuple[str, ProducerFn]] = [
         "sentiment_tone",
         lambda con, *, cutoff, computed_at, **cfg: _gdelt_tone_signals(
             con, cutoff=cutoff, computed_at=computed_at, **cfg["thresholds"].get("sentiment_tone", {})
+        ),
+    ),
+    (
+        "fiscal_sustainability",
+        lambda con, *, cutoff, computed_at, **cfg: _fiscal_sustainability_signals(
+            con, cutoff=cutoff, computed_at=computed_at
         ),
     ),
 ]
