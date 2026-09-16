@@ -13,6 +13,11 @@ import httpx
 from ..sources import load_sources, Source
 from ._retry import fetch_with_retry
 
+# GDELT documents a hard "one request every 5 seconds" limit and answers 429
+# with that text. The default 1s/2s/4s backoff never reaches 5s, so every retry
+# was rate-limited too and the run reported fetched=0. 6s/12s/24s clears it.
+GDELT_BACKOFF_BASE_S = 6.0
+
 
 @dataclass(frozen=True)
 class FetchResult:
@@ -129,7 +134,8 @@ def ingest_gdelt_doc_query(*, config_path: Path, source_name: str, data_dir: Pat
 
     try:
         fr = fetch_with_retry(
-            lambda: fetch_gdelt_docs_json(source.url, etag=state.get("etag"), last_modified=state.get("last_modified"))
+            lambda: fetch_gdelt_docs_json(source.url, etag=state.get("etag"), last_modified=state.get("last_modified")),
+            backoff_base=GDELT_BACKOFF_BASE_S,
         )
         init_db(db_path)
 

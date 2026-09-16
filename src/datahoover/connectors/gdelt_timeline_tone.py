@@ -41,6 +41,9 @@ import httpx
 from ..sources import Source, load_sources
 from ._retry import fetch_with_retry
 
+# See gdelt_doc_query: GDELT's documented limit is one request per 5 seconds.
+GDELT_BACKOFF_BASE_S = 6.0
+
 USER_AGENT = "data-hoover/0.1 (+local-first; contact: you@example.com)"
 HTTP_TIMEOUT_S = 30.0
 
@@ -150,7 +153,10 @@ def ingest_gdelt_timeline_tone(
     run_id = str(uuid.uuid4())
 
     try:
-        result = fetch_with_retry(lambda: fetch_gdelt_timeline_tone(source.url))
+        result = fetch_with_retry(
+            lambda: fetch_gdelt_timeline_tone(source.url),
+            backoff_base=GDELT_BACKOFF_BASE_S,
+        )
         ingested_at = datetime.now(timezone.utc)
         raw_path = _raw_path(data_dir, source.name, ingested_at)
         raw_path.parent.mkdir(parents=True, exist_ok=True)
