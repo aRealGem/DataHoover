@@ -579,38 +579,60 @@ def main(argv: list[str] | None = None) -> int:
         if panels.forward:
             from .fiscal.derive import (
                 FORWARD_DEFLATOR_WEDGE_BASIS,
+                FORWARD_DEFLATOR_WEDGE_CBO_BASIS,
+                FORWARD_DEFLATOR_WEDGE_CBO_PP,
                 FORWARD_DEFLATOR_WEDGE_LATEST_PP,
-                FORWARD_DEFLATOR_WEDGE_MEAN_PP,
+                FORWARD_DEFLATOR_WEDGE_MAX_PP,
+                FORWARD_DEFLATOR_WEDGE_MIN_PP,
+                FORWARD_DEFLATOR_WEDGE_N_INDEPENDENT,
+                FORWARD_DEFLATOR_WEDGE_N_WINDOWS,
                 FORWARD_DEFLATOR_WEDGE_SD_PP,
                 MEASURE_DISAGREEMENT_LIMIT_PP,
                 deflator_wedge_adjust,
+                deflator_wedge_forward,
             )
 
             latest_fwd = panels.forward[-1]
             print(
-                f"[fiscal] deflator wedge (CPI|GDPDEF), horizon-matched: "
-                f"latest {FORWARD_DEFLATOR_WEDGE_LATEST_PP:+.4f}pp, "
-                f"10y-window mean {FORWARD_DEFLATOR_WEDGE_MEAN_PP:+.4f}pp, "
-                f"band +/-{FORWARD_DEFLATOR_WEDGE_SD_PP:.4f}pp "
+                f"[fiscal] deflator wedge (CPI|GDPDEF), horizon-matched: latest "
+                f"{FORWARD_DEFLATOR_WEDGE_LATEST_PP:+.4f}pp, range "
+                f"[{FORWARD_DEFLATOR_WEDGE_MIN_PP:+.4f}, {FORWARD_DEFLATOR_WEDGE_MAX_PP:+.4f}]pp, "
+                f"SD {FORWARD_DEFLATOR_WEDGE_SD_PP:.4f}pp over "
+                f"{FORWARD_DEFLATOR_WEDGE_N_WINDOWS} OVERLAPPING windows "
+                f"(~{FORWARD_DEFLATOR_WEDGE_N_INDEPENDENT:.0f} independent) "
                 f"[{FORWARD_DEFLATOR_WEDGE_BASIS}]"
             )
             print(
                 "[fiscal] identity: r is CPI-deflated, g is GDPDEF-deflated, so "
-                "(r-g)_true = (r-g)_measured + wedge. The wedge is a one-way "
-                "BIAS (never negative on this basis), not symmetric noise."
+                "(r-g)_true = (r-g)_measured + wedge. One-way BIAS, not noise. "
+                "Sign is called off the RANGE band, not the SD band."
             )
+            verdicts = {}
             for name, val in (("tips", latest_fwd.fwd_rg_tips),
                               ("model", latest_fwd.fwd_rg_model)):
                 a = deflator_wedge_adjust(val)
                 if a["raw"] is None:
                     print(f"[fiscal]   fwd_rg_{name}: no data")
                     continue
-                verdict = (f"sign {a['sign']}" if a["sign_callable"]
-                           else "sign NOT callable (band spans zero)")
+                # "Marginal" = the range band clears zero, but only just. The
+                # distinction matters: a sign that survives on 0.09pp of margin
+                # is not the same claim as one with 0.30pp behind it.
+                marginal = a["sign_callable"] and min(abs(a["low"]), abs(a["high"])) < 0.10
+                verdicts[name] = ("marginal" if marginal
+                                  else (a["sign"] or "not callable"))
                 print(
                     f"[fiscal]   fwd_rg_{name}: raw {a['raw']:+.4f}pp  "
                     f"adjusted {a['adjusted']:+.4f}pp  "
-                    f"band [{a['low']:+.4f}, {a['high']:+.4f}]pp  -> {verdict}"
+                    f"range [{a['low']:+.4f}, {a['high']:+.4f}]pp  "
+                    f"SD band [{a['sd_low']:+.4f}, {a['sd_high']:+.4f}]pp  -> "
+                    f"{verdicts[name]}"
+                )
+                f = deflator_wedge_forward(val)
+                print(
+                    f"[fiscal]     forecaster-based (CBO, wedge "
+                    f"{FORWARD_DEFLATOR_WEDGE_CBO_PP:+.2f}pp): "
+                    f"adjusted {f['adjusted']:+.4f}pp  "
+                    f"range [{f['low']:+.4f}, {f['high']:+.4f}]pp"
                 )
             gap = latest_fwd.disagreement
             if gap is not None:
@@ -618,8 +640,13 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     f"[fiscal]   measure disagreement {gap:.4f}pp vs limit "
                     f"{MEASURE_DISAGREEMENT_LIMIT_PP:.2f}pp -> D1 "
-                    f"{'FIRES (not decision-grade)' if fired else 'clear'}"
+                    f"{'FIRES' if fired else 'clear'}"
                 )
+                if verdicts:
+                    summary = "; ".join(f"{k} {v}" for k, v in verdicts.items())
+                    print(f"[fiscal]   VERDICT: {summary}"
+                          + ("; NOT decision-grade (D1)" if fired else ""))
+            print(f"[fiscal]   CBO basis: {FORWARD_DEFLATOR_WEDGE_CBO_BASIS}")
         for transition in transitions:
             print(f"[fiscal] {transition.format()}")
         if args.show_alerts:

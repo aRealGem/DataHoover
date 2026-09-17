@@ -536,6 +536,10 @@ FORWARD_GROWTH_DEFLATOR = "GDPDEF"
 # windows ending 1995-2024 (effective n = 30 windows over 39 annual points):
 #   mean +0.4106pp   SD 0.2604pp   range +0.0061 .. +0.8693pp
 #   latest window (2024) +0.1962pp
+# The 30 windows OVERLAP (10-year means over 39 annual points), so they are
+# nowhere near 30 independent observations -- roughly 3-4 independent decades.
+# Quote the count that way: an SD over overlapping windows understates true
+# sampling error and must never be read as if n=30.
 # For contrast the naive annual series gives mean +0.4418 / SD 0.5524 — the
 # horizon-matched band is less than half as wide, so the earlier version
 # materially OVERSTATED the uncertainty.
@@ -547,10 +551,11 @@ FORWARD_DEFLATOR_WEDGE_SD_PP = 0.2604
 FORWARD_DEFLATOR_WEDGE_LATEST_PP = 0.1962
 FORWARD_DEFLATOR_WEDGE_MIN_PP = 0.0061
 FORWARD_DEFLATOR_WEDGE_MAX_PP = 0.8693
-FORWARD_DEFLATOR_WEDGE_N_WINDOWS = 30
+FORWARD_DEFLATOR_WEDGE_N_WINDOWS = 30        # overlapping
+FORWARD_DEFLATOR_WEDGE_N_INDEPENDENT = 3.9   # 39 annual points / 10y window
 FORWARD_DEFLATOR_WEDGE_BASIS = (
     "FRED CPIAUCSL vs GDPDEF, annual averages, rolling 10y means, "
-    "windows ending 1995-2024 (n=30)"
+    "windows ending 1995-2024 (30 overlapping windows, ~3-4 independent)"
 )
 
 # UNVERIFIED — forward (forecaster-based) wedge. The ruling asks for
@@ -561,7 +566,15 @@ FORWARD_DEFLATOR_WEDGE_BASIS = (
 # computed here. Do not fill this from recall; read it off the published
 # spreadsheet. Until then the historical rolling wedge above is what is used,
 # and the adjusted figure is labelled accordingly.
-FORWARD_DEFLATOR_WEDGE_CBO_PP = None
+FORWARD_DEFLATOR_WEDGE_CBO_PP = 0.27
+FORWARD_DEFLATOR_WEDGE_CBO_ROUNDING_PP = 0.07
+FORWARD_DEFLATOR_WEDGE_CBO_BASIS = (
+    "CBO Feb 2026 Budget and Economic Outlook 2026-2036, Q4/Q4. 2027-2036 means: "
+    "GDP price index 2.04 vs CPI 2.31 -> +0.27pp, rounding +/-0.07. SECONDARY "
+    "SOURCE: Reuters table of the CBO outlook, rounded. cbo.gov returns HTTP 403 "
+    "to automated fetch, so this is a DATED CONSTANT, not a verified first-party "
+    "read. Re-check against the published spreadsheet before relying on it."
+)
 
 
 def deflator_wedge_adjust(measured_rg_pp: Optional[float],
@@ -569,37 +582,62 @@ def deflator_wedge_adjust(measured_rg_pp: Optional[float],
                           band_pp: float = FORWARD_DEFLATOR_WEDGE_SD_PP) -> dict:
     """Apply the wedge identity to a measured forward r-g.
 
-    The measured rate is deflated by CPI; growth is deflated by the GDP price
-    index. Converting the rate onto the growth leg's basis:
+    r is CPI-deflated and g is GDP-deflator-deflated. Putting the rate onto the
+    growth leg's basis gives r_GDPDEF = r_CPI + wedge, hence
 
-        r_GDPDEF = r_CPI + wedge          (wedge = CPI inflation - GDPDEF inflation)
-    so  (r-g)_true = (r-g)_measured + wedge
+        (r-g)_true = (r-g)_measured + wedge
 
-    The wedge is a one-directional BIAS, not symmetric noise -- on the
-    horizon-matched basis it has never been negative -- so it shifts the
-    reading rather than merely widening it. `band_pp` is the dispersion of
-    10-year mean wedges and is applied around the ADJUSTED value.
+    The wedge is a one-directional BIAS -- on the horizon-matched basis it has
+    never been negative -- so it shifts the reading, it does not merely widen it.
 
-    Returns raw, adjusted, band bounds, and whether the sign is callable:
-    a sign is only called when the entire band sits one side of zero.
+    TWO bands are returned and the SIGN RULE uses the wider one:
+
+      range band  raw + [min, max] of the observed rolling 10y wedge. The honest
+                  envelope; this is what decides sign-callability.
+      sd band     adjusted +/- 1 SD, reported alongside for scale only. NOT the
+                  sign test: the SD is computed over OVERLAPPING windows
+                  (~3-4 independent decades) and understates sampling error.
+
+    A sign is called only when the entire RANGE band sits one side of zero.
     """
     if measured_rg_pp is None:
         return {"raw": None, "adjusted": None, "low": None, "high": None,
-                "sign": None, "sign_callable": False, "wedge_pp": wedge_pp,
-                "band_pp": band_pp}
+                "sd_low": None, "sd_high": None, "sign": None,
+                "sign_callable": False, "wedge_pp": wedge_pp, "band_pp": band_pp}
     adj = measured_rg_pp + wedge_pp
-    low, high = adj - band_pp, adj + band_pp
+    low = measured_rg_pp + FORWARD_DEFLATOR_WEDGE_MIN_PP
+    high = measured_rg_pp + FORWARD_DEFLATOR_WEDGE_MAX_PP
     callable_ = (low > 0.0) or (high < 0.0)
     return {
         "raw": measured_rg_pp,
         "adjusted": adj,
         "low": low,
         "high": high,
+        "sd_low": adj - band_pp,
+        "sd_high": adj + band_pp,
         "sign": ("positive" if adj > 0 else "negative") if callable_ else None,
         "sign_callable": callable_,
         "wedge_pp": wedge_pp,
         "band_pp": band_pp,
     }
+
+
+def deflator_wedge_forward(measured_rg_pp: Optional[float]) -> dict:
+    """Forecaster-based companion to deflator_wedge_adjust().
+
+    Uses CBO's projected 10-year CPI-U minus GDP price index rather than the
+    historical rolling wedge. Reported BESIDE the historical figure, never
+    instead of it, and labelled forecaster-based: it is a projection read off a
+    secondary source, not a market-implied quantity.
+    """
+    if measured_rg_pp is None:
+        return {"raw": None, "adjusted": None, "low": None, "high": None}
+    w = FORWARD_DEFLATOR_WEDGE_CBO_PP
+    r = FORWARD_DEFLATOR_WEDGE_CBO_ROUNDING_PP
+    return {"raw": measured_rg_pp, "adjusted": measured_rg_pp + w,
+            "low": measured_rg_pp + w - r, "high": measured_rg_pp + w + r,
+            "wedge_pp": w, "rounding_pp": r,
+            "basis": FORWARD_DEFLATOR_WEDGE_CBO_BASIS}
 
 # Below this the two forward measures agree well enough to read as one number.
 MEASURE_DISAGREEMENT_LIMIT_PP = 0.20

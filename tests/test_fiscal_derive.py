@@ -369,3 +369,47 @@ def test_wedge_handles_missing_measurement():
 
     r = deflator_wedge_adjust(None)
     assert r["adjusted"] is None and r["sign_callable"] is False
+
+
+def test_sign_rule_uses_range_band_not_sd_band():
+    """Ruling round 3: band = raw + [min, max]; SD reported alongside only."""
+    from datahoover.fiscal.derive import (
+        FORWARD_DEFLATOR_WEDGE_MAX_PP,
+        FORWARD_DEFLATOR_WEDGE_MIN_PP,
+        deflator_wedge_adjust,
+    )
+
+    r = deflator_wedge_adjust(0.0791)
+    assert r["low"] == pytest.approx(0.0791 + FORWARD_DEFLATOR_WEDGE_MIN_PP)
+    assert r["high"] == pytest.approx(0.0791 + FORWARD_DEFLATOR_WEDGE_MAX_PP)
+    # The range band is the WIDER of the two and is what decides the sign.
+    assert (r["high"] - r["low"]) > (r["sd_high"] - r["sd_low"])
+    assert r["sign_callable"] is True
+
+
+def test_overlapping_window_count_is_not_independent_n():
+    from datahoover.fiscal.derive import (
+        FORWARD_DEFLATOR_WEDGE_N_INDEPENDENT,
+        FORWARD_DEFLATOR_WEDGE_N_WINDOWS,
+    )
+
+    assert FORWARD_DEFLATOR_WEDGE_N_WINDOWS == 30
+    # ~3-4 independent decades, an order of magnitude fewer than the window count.
+    assert 3.0 <= FORWARD_DEFLATOR_WEDGE_N_INDEPENDENT <= 4.0
+
+
+def test_forecaster_wedge_is_a_dated_constant_with_secondary_provenance():
+    from datahoover.fiscal.derive import (
+        FORWARD_DEFLATOR_WEDGE_CBO_BASIS,
+        FORWARD_DEFLATOR_WEDGE_CBO_PP,
+        deflator_wedge_forward,
+    )
+
+    assert FORWARD_DEFLATOR_WEDGE_CBO_PP == pytest.approx(0.27)
+    # The provenance must keep saying it is secondary and unverified.
+    assert "SECONDARY" in FORWARD_DEFLATOR_WEDGE_CBO_BASIS
+    assert "403" in FORWARD_DEFLATOR_WEDGE_CBO_BASIS
+
+    f = deflator_wedge_forward(0.0791)
+    assert f["adjusted"] == pytest.approx(0.0791 + 0.27)
+    assert f["high"] - f["low"] == pytest.approx(2 * 0.07)
