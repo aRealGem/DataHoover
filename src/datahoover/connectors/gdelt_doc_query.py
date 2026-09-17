@@ -19,6 +19,23 @@ from ._retry import fetch_with_retry
 GDELT_BACKOFF_BASE_S = 6.0
 
 
+class GdeltResponseError(RuntimeError):
+    """GDELT answered, but the body is not a result set we can trust."""
+
+
+class GdeltRateLimited(GdeltResponseError):
+    """GDELT returned 429. Distinct from an empty result, and never zero rows."""
+
+
+def gdelt_response_diagnostics(r, body_chars: int = 300) -> str:
+    """status / content-type / byte length / body head, for every response."""
+    body = r.content or b""
+    head = body[:body_chars].decode("utf-8", errors="replace").replace("\n", " ")
+    return (f"status={r.status_code} "
+            f"content-type={r.headers.get('Content-Type') or '(none)'!r} "
+            f"bytes={len(body)} head={head!r}")
+
+
 @dataclass(frozen=True)
 class FetchResult:
     status_code: int
@@ -80,13 +97,36 @@ def fetch_gdelt_docs_json(
     if r.status_code == 304:
         return FetchResult(status_code=304, etag=etag, last_modified=last_modified, data=None, raw_bytes=None)
 
+    # Diagnostics on EVERY response. GDELT answers a rate-limit violation with
+    # HTTP 429 and a PROSE body, and has also been observed returning 200 with
+    # an empty JSON object. Without this, both collapsed into an indistinguishable
+    # "fetched=0" in the weekly log and there was nothing to diagnose from.
+    diag = gdelt_response_diagnostics(r)
+    print(f"[gdelt] {diag}")
+
+    if r.status_code == 429:
+        raise GdeltRateLimited(
+            f"GDELT rate-limited this request. {diag}. The documented limit is "
+            f"one request every 5 seconds; sustained 429 at wider spacing "
+            f"indicates an IP-level soft block, not per-request throttling."
+        )
     r.raise_for_status()
     new_etag = r.headers.get("ETag")
     new_last_modified = r.headers.get("Last-Modified")
     raw = r.content
-    data = r.json()
+    try:
+        data = r.json()
+    except ValueError as exc:
+        # A 200 carrying a non-JSON body is an ERROR. It must never be allowed
+        # to read as "the query legitimately matched nothing".
+        raise GdeltResponseError(
+            f"GDELT returned HTTP {r.status_code} with a body that is not JSON. "
+            f"This is an error, NOT an empty result set. {diag}"
+        ) from exc
     if not isinstance(data, dict):
-        raise ValueError("GDELT response must be a JSON object")
+        raise GdeltResponseError(
+            f"GDELT response must be a JSON object, got {type(data).__name__}. {diag}"
+        )
     return FetchResult(status_code=r.status_code, etag=new_etag, last_modified=new_last_modified, data=data, raw_bytes=raw)
 
 
