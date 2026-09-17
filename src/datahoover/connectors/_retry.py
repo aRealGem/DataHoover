@@ -52,8 +52,12 @@ def fetch_with_retry(
             if attempt == max_attempts:
                 raise
             last_exception = exc
-        except httpx.RequestError:
-            # Last attempt - don't sleep, just raise
+        except httpx.RequestError as exc:
+            # `as exc` was missing here. The line below referenced a name this
+            # branch never bound, so any transport-level failure (timeout, reset,
+            # DNS) raised UnboundLocalError from inside the retry helper instead
+            # of surfacing the real network error. Observed 2026-08-29 in the
+            # weekly GDELT run as "cannot access local variable 'exc'".
             if attempt == max_attempts:
                 raise
             last_exception = exc
