@@ -315,3 +315,112 @@ def test_bill_share_skips_dates_missing_a_leg():
     }
     rows = derive.build_treasury_panel(panel)
     assert rows == [] or all(row.bill_share is None for row in rows)
+
+
+# --- deflator wedge identity (ruling DH-CRUDE-001 Q4) -------------------------
+
+def test_wedge_identity_shifts_reading_upward_not_symmetrically():
+    """(r-g)_true = (r-g)_measured + wedge. The wedge is a bias, not noise."""
+    from datahoover.fiscal.derive import (
+        FORWARD_DEFLATOR_WEDGE_LATEST_PP,
+        deflator_wedge_adjust,
+    )
+
+    r = deflator_wedge_adjust(-0.0115)
+    assert r["adjusted"] == pytest.approx(-0.0115 + FORWARD_DEFLATOR_WEDGE_LATEST_PP)
+    # A measured value that reads negative can be genuinely positive once the
+    # rate is put on the growth leg's price basis. That sign flip is the whole
+    # reason the wedge cannot be left as an unquantified caveat.
+    assert r["adjusted"] > 0
+
+
+def test_wedge_sign_called_only_when_band_clears_zero():
+    from datahoover.fiscal.derive import deflator_wedge_adjust
+
+    spanning = deflator_wedge_adjust(-0.0115)          # band straddles zero
+    assert spanning["low"] < 0 < spanning["high"]
+    assert spanning["sign_callable"] is False
+    assert spanning["sign"] is None
+
+    clear = deflator_wedge_adjust(0.2895)              # band entirely positive
+    assert clear["low"] > 0
+    assert clear["sign_callable"] is True
+    assert clear["sign"] == "positive"
+
+
+def test_wedge_band_is_horizon_matched_not_annual():
+    """The ruling replaced the annual SD with the SD of 10-year mean wedges."""
+    from datahoover.fiscal.derive import (
+        FORWARD_DEFLATOR_WEDGE_MIN_PP,
+        FORWARD_DEFLATOR_WEDGE_N_WINDOWS,
+        FORWARD_DEFLATOR_WEDGE_SD_PP,
+    )
+
+    # Annual SD was 0.5524; horizon-matched is less than half that.
+    assert FORWARD_DEFLATOR_WEDGE_SD_PP < 0.5524 / 2
+    # On the horizon-matched basis the wedge never goes negative, which is what
+    # makes it a bias rather than symmetric noise.
+    assert FORWARD_DEFLATOR_WEDGE_MIN_PP > 0
+    assert FORWARD_DEFLATOR_WEDGE_N_WINDOWS == 30
+
+
+def test_wedge_handles_missing_measurement():
+    from datahoover.fiscal.derive import deflator_wedge_adjust
+
+    r = deflator_wedge_adjust(None)
+    assert r["adjusted"] is None and r["sign_callable"] is False
+
+
+def test_sign_rule_uses_range_band_not_sd_band():
+    """Ruling round 3: band = raw + [min, max]; SD reported alongside only."""
+    from datahoover.fiscal.derive import (
+        FORWARD_DEFLATOR_WEDGE_MAX_PP,
+        FORWARD_DEFLATOR_WEDGE_MIN_PP,
+        deflator_wedge_adjust,
+    )
+
+    r = deflator_wedge_adjust(0.0791)
+    assert r["low"] == pytest.approx(0.0791 + FORWARD_DEFLATOR_WEDGE_MIN_PP)
+    assert r["high"] == pytest.approx(0.0791 + FORWARD_DEFLATOR_WEDGE_MAX_PP)
+    # The range band is the WIDER of the two and is what decides the sign.
+    assert (r["high"] - r["low"]) > (r["sd_high"] - r["sd_low"])
+    assert r["sign_callable"] is True
+
+
+def test_overlapping_window_count_is_not_independent_n():
+    from datahoover.fiscal.derive import (
+        FORWARD_DEFLATOR_WEDGE_N_INDEPENDENT,
+        FORWARD_DEFLATOR_WEDGE_N_WINDOWS,
+    )
+
+    assert FORWARD_DEFLATOR_WEDGE_N_WINDOWS == 30
+    # ~3-4 independent decades, an order of magnitude fewer than the window count.
+    assert 3.0 <= FORWARD_DEFLATOR_WEDGE_N_INDEPENDENT <= 4.0
+
+
+def test_marginal_margin_is_derived_from_the_d1_limit():
+    """Round 4: derived, not a literal. If D1 moves, this moves with it."""
+    from datahoover.fiscal.derive import (
+        MARGINAL_MARGIN_PP,
+        MEASURE_DISAGREEMENT_LIMIT_PP,
+    )
+
+    assert MARGINAL_MARGIN_PP == pytest.approx(MEASURE_DISAGREEMENT_LIMIT_PP / 2.0)
+    assert MARGINAL_MARGIN_PP == pytest.approx(0.10)  # on today's D1 limit
+
+
+def test_forecaster_wedge_is_a_dated_constant_with_secondary_provenance():
+    from datahoover.fiscal.derive import (
+        FORWARD_DEFLATOR_WEDGE_CBO_BASIS,
+        FORWARD_DEFLATOR_WEDGE_CBO_PP,
+        deflator_wedge_forward,
+    )
+
+    assert FORWARD_DEFLATOR_WEDGE_CBO_PP == pytest.approx(0.27)
+    # The provenance must keep saying it is secondary and unverified.
+    assert "SECONDARY" in FORWARD_DEFLATOR_WEDGE_CBO_BASIS
+    assert "403" in FORWARD_DEFLATOR_WEDGE_CBO_BASIS
+
+    f = deflator_wedge_forward(0.0791)
+    assert f["adjusted"] == pytest.approx(0.0791 + 0.27)
+    assert f["high"] - f["low"] == pytest.approx(2 * 0.07)

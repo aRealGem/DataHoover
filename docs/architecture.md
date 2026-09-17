@@ -285,25 +285,53 @@ data. The one documented exception is the forward test, which pairs a CPI-linked
 real yield against GDP-deflator real potential growth; that wedge must be opted
 into with `allow_deflator_wedge=True` and is recorded on the result.
 
-**Deflator-wedge ruling (2026-09-16).** The wedge was measured rather than
-assumed: FRED `CPIAUCSL` vs `GDPDEF`, annual averages 1986-2025 (n=40) give a
-mean of **+0.426 pp** with a **standard deviation of 0.554 pp**, ranging -0.93
-to +1.88 pp and changing sign. 29 of 40 years exceed 0.20 pp and 18 exceed
-0.50 pp. The code previously called this "small and stable (a few tenths of a
-point)" — the magnitude was about right, the stability was not.
+**Deflator-wedge ruling (2026-09-17, DH-CRUDE-001 Q4).** Supersedes the
+2026-09-16 version, which was partially overturned. That version used the
+standard deviation of the *annual* wedge series as an uncertainty band. This was
+a **horizon mismatch**: the wedge is applied to a ten-year yield, so the relevant
+dispersion is of ten-year *average* wedges, and single-year noise largely
+averages out.
 
-The consequence is the load-bearing part: **the wedge is larger than the signal
-it contaminates.** Its mean alone is more than twice the 0.20 pp disagreement
-limit, and it exceeds the magnitude of current forward r−g readings. The ruling
-is therefore to (a) keep `allow_deflator_wedge` as an explicit opt-in, which is
-the right mechanism, (b) carry the measured band as a floor on forward r−g
-uncertainty via `FORWARD_DEFLATOR_WEDGE_MEAN_PP` / `_SD_PP`, and (c) **never
-present the forward r−g sign as determinate** while the wedge stands —
-`derive-fiscal` now prints an explicit `WEDGE EXCEEDS SIGNAL` line when the
-bias is at least as large as the largest forward reading, and directs the reader
-to the realised panel for direction. Correcting the wedge properly would need a
-GDP-deflator-based expected-inflation series at a 10-year horizon, which does
-not exist in free form — so it is disclosed, not silently fixed.
+Re-measured on the horizon-matched basis — FRED `CPIAUCSL` vs `GDPDEF`, annual
+averages, rolling 10-year means, windows ending 1995-2024 (n = 30):
+
+| | annual (superseded) | rolling 10y (current) |
+|---|---|---|
+| mean | +0.4418 pp | **+0.4106 pp** |
+| SD | 0.5524 pp | **0.2604 pp** |
+| range | -0.93 … +1.88 pp | **+0.0061 … +0.8693 pp** |
+| latest window | — | **+0.1962 pp (2024)** |
+
+Two things change. The band is **less than half as wide**, so the earlier
+version materially overstated the uncertainty. And on this basis the wedge
+**never goes negative** — which makes it a one-directional **bias**, not
+symmetric noise.
+
+**The identity is now in code.** The rate is CPI-deflated and growth is
+GDP-deflator-deflated, so putting the rate on the growth leg's basis gives
+`r_GDPDEF = r_CPI + wedge`, hence **`(r-g)_true = (r-g)_measured + wedge`**.
+`derive.deflator_wedge_adjust()` applies it and `derive-fiscal` prints raw,
+adjusted and band side by side. **A sign is called only when the entire band
+sits one side of zero** — replacing the previous blanket "sign not determinate",
+which was too pessimistic once the band was horizon-matched.
+
+This is not cosmetic. On 2026-09 the model measure reads `-0.0115 pp` raw and
+**`+0.2753 pp` adjusted**: correcting the price-basis bias flips its sign, and
+both forward measures then resolve **positive** (r > g, adverse debt dynamics).
+The D1 disagreement gate is unaffected and still fires at 0.2104 pp against its
+0.20 pp limit — sign-callability and decision-grade are separate questions and
+the output now distinguishes them.
+
+**UNVERIFIED — the forecaster-based forward wedge.** The ruling also asks for
+`wedge_fwd` from the difference of CBO's 10-year mean CPI-U and GDP price index
+projections. CBO publishes the CPI-U leg, but `cbo.gov` returns **HTTP 403** to
+automated fetch (both `/publication/62105` and `/data/budget-economic-data`), so
+the GDP price index leg could not be confirmed and no forward wedge is computed.
+`FORWARD_DEFLATOR_WEDGE_CBO_PP` is `None` pending a read off the published
+spreadsheet. The historical rolling wedge is used meanwhile.
+
+**Out of scope, logged:** the 10-year marginal yield is not the effective rate
+on the outstanding debt stock. Noted, not actioned.
 
 **Two measures, never averaged.** `fwd_rg_tips` and `fwd_rg_model` are both
 computed and reported. When they disagree by more than 0.20 pp the forward
