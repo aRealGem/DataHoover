@@ -85,3 +85,52 @@ def test_backoff_base_is_honoured(monkeypatch):
     # 6s then 12s -- both outside GDELT's documented 5s window.
     assert slept == [6.0, 12.0]
     assert min(slept) >= 5.0
+
+
+def test_explicit_schedule_overrides_exponential_backoff(monkeypatch):
+    """GDELT's window is minutes; a 6s-base doubling sequence never reaches it."""
+    slept: list[float] = []
+    monkeypatch.setattr("datahoover.connectors._retry.time.sleep", slept.append)
+
+    def always_429():
+        raise _status_error(429)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        fetch_with_retry(always_429, max_attempts=4,
+                         schedule=(60.0, 300.0, 900.0), jitter=0.0)
+
+    assert slept == [60.0, 300.0, 900.0]
+
+
+def test_schedule_jitter_is_bounded_and_deterministic(monkeypatch):
+    runs = []
+    for _ in range(2):
+        slept: list[float] = []
+        monkeypatch.setattr("datahoover.connectors._retry.time.sleep", slept.append)
+
+        def always_429():
+            raise _status_error(429)
+
+        with pytest.raises(httpx.HTTPStatusError):
+            fetch_with_retry(always_429, max_attempts=4,
+                             schedule=(60.0, 300.0, 900.0), jitter=15.0)
+        runs.append(slept)
+
+    base = [60.0, 300.0, 900.0]
+    for s, b in zip(runs[0], base):
+        assert b <= s <= b + 15.0, "jitter must never shorten the wait"
+    # Deterministic: reruns must not drift, or the schedule is unreproducible.
+    assert runs[0] == runs[1]
+
+
+def test_schedule_shorter_than_attempts_reuses_its_last_step(monkeypatch):
+    slept: list[float] = []
+    monkeypatch.setattr("datahoover.connectors._retry.time.sleep", slept.append)
+
+    def always_429():
+        raise _status_error(429)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        fetch_with_retry(always_429, max_attempts=5, schedule=(10.0, 20.0), jitter=0.0)
+
+    assert slept == [10.0, 20.0, 20.0, 20.0]
