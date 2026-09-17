@@ -579,29 +579,46 @@ def main(argv: list[str] | None = None) -> int:
         if panels.forward:
             from .fiscal.derive import (
                 FORWARD_DEFLATOR_WEDGE_BASIS,
+                FORWARD_DEFLATOR_WEDGE_LATEST_PP,
                 FORWARD_DEFLATOR_WEDGE_MEAN_PP,
                 FORWARD_DEFLATOR_WEDGE_SD_PP,
+                MEASURE_DISAGREEMENT_LIMIT_PP,
+                deflator_wedge_adjust,
             )
 
             latest_fwd = panels.forward[-1]
-            readings = [
-                v
-                for v in (latest_fwd.fwd_rg_tips, latest_fwd.fwd_rg_model)
-                if v is not None
-            ]
-            largest = max((abs(v) for v in readings), default=0.0)
             print(
-                f"[fiscal] forward deflator wedge (CPI|GDPDEF): "
-                f"{FORWARD_DEFLATOR_WEDGE_MEAN_PP:+.3f}pp mean, "
-                f"sd {FORWARD_DEFLATOR_WEDGE_SD_PP:.3f}pp "
+                f"[fiscal] deflator wedge (CPI|GDPDEF), horizon-matched: "
+                f"latest {FORWARD_DEFLATOR_WEDGE_LATEST_PP:+.4f}pp, "
+                f"10y-window mean {FORWARD_DEFLATOR_WEDGE_MEAN_PP:+.4f}pp, "
+                f"band +/-{FORWARD_DEFLATOR_WEDGE_SD_PP:.4f}pp "
                 f"[{FORWARD_DEFLATOR_WEDGE_BASIS}]"
             )
-            if largest and FORWARD_DEFLATOR_WEDGE_MEAN_PP >= largest:
+            print(
+                "[fiscal] identity: r is CPI-deflated, g is GDPDEF-deflated, so "
+                "(r-g)_true = (r-g)_measured + wedge. The wedge is a one-way "
+                "BIAS (never negative on this basis), not symmetric noise."
+            )
+            for name, val in (("tips", latest_fwd.fwd_rg_tips),
+                              ("model", latest_fwd.fwd_rg_model)):
+                a = deflator_wedge_adjust(val)
+                if a["raw"] is None:
+                    print(f"[fiscal]   fwd_rg_{name}: no data")
+                    continue
+                verdict = (f"sign {a['sign']}" if a["sign_callable"]
+                           else "sign NOT callable (band spans zero)")
                 print(
-                    f"[fiscal] WEDGE EXCEEDS SIGNAL: |forward r-g| max "
-                    f"{largest:.4f}pp <= wedge bias "
-                    f"{FORWARD_DEFLATOR_WEDGE_MEAN_PP:.3f}pp — forward sign is "
-                    f"NOT determinate; read direction from the realised panel"
+                    f"[fiscal]   fwd_rg_{name}: raw {a['raw']:+.4f}pp  "
+                    f"adjusted {a['adjusted']:+.4f}pp  "
+                    f"band [{a['low']:+.4f}, {a['high']:+.4f}]pp  -> {verdict}"
+                )
+            gap = latest_fwd.disagreement
+            if gap is not None:
+                fired = gap > MEASURE_DISAGREEMENT_LIMIT_PP
+                print(
+                    f"[fiscal]   measure disagreement {gap:.4f}pp vs limit "
+                    f"{MEASURE_DISAGREEMENT_LIMIT_PP:.2f}pp -> D1 "
+                    f"{'FIRES (not decision-grade)' if fired else 'clear'}"
                 )
         for transition in transitions:
             print(f"[fiscal] {transition.format()}")

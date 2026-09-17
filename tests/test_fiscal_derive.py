@@ -315,3 +315,57 @@ def test_bill_share_skips_dates_missing_a_leg():
     }
     rows = derive.build_treasury_panel(panel)
     assert rows == [] or all(row.bill_share is None for row in rows)
+
+
+# --- deflator wedge identity (ruling DH-CRUDE-001 Q4) -------------------------
+
+def test_wedge_identity_shifts_reading_upward_not_symmetrically():
+    """(r-g)_true = (r-g)_measured + wedge. The wedge is a bias, not noise."""
+    from datahoover.fiscal.derive import (
+        FORWARD_DEFLATOR_WEDGE_LATEST_PP,
+        deflator_wedge_adjust,
+    )
+
+    r = deflator_wedge_adjust(-0.0115)
+    assert r["adjusted"] == pytest.approx(-0.0115 + FORWARD_DEFLATOR_WEDGE_LATEST_PP)
+    # A measured value that reads negative can be genuinely positive once the
+    # rate is put on the growth leg's price basis. That sign flip is the whole
+    # reason the wedge cannot be left as an unquantified caveat.
+    assert r["adjusted"] > 0
+
+
+def test_wedge_sign_called_only_when_band_clears_zero():
+    from datahoover.fiscal.derive import deflator_wedge_adjust
+
+    spanning = deflator_wedge_adjust(-0.0115)          # band straddles zero
+    assert spanning["low"] < 0 < spanning["high"]
+    assert spanning["sign_callable"] is False
+    assert spanning["sign"] is None
+
+    clear = deflator_wedge_adjust(0.2895)              # band entirely positive
+    assert clear["low"] > 0
+    assert clear["sign_callable"] is True
+    assert clear["sign"] == "positive"
+
+
+def test_wedge_band_is_horizon_matched_not_annual():
+    """The ruling replaced the annual SD with the SD of 10-year mean wedges."""
+    from datahoover.fiscal.derive import (
+        FORWARD_DEFLATOR_WEDGE_MIN_PP,
+        FORWARD_DEFLATOR_WEDGE_N_WINDOWS,
+        FORWARD_DEFLATOR_WEDGE_SD_PP,
+    )
+
+    # Annual SD was 0.5524; horizon-matched is less than half that.
+    assert FORWARD_DEFLATOR_WEDGE_SD_PP < 0.5524 / 2
+    # On the horizon-matched basis the wedge never goes negative, which is what
+    # makes it a bias rather than symmetric noise.
+    assert FORWARD_DEFLATOR_WEDGE_MIN_PP > 0
+    assert FORWARD_DEFLATOR_WEDGE_N_WINDOWS == 30
+
+
+def test_wedge_handles_missing_measurement():
+    from datahoover.fiscal.derive import deflator_wedge_adjust
+
+    r = deflator_wedge_adjust(None)
+    assert r["adjusted"] is None and r["sign_callable"] is False
