@@ -587,6 +587,7 @@ def main(argv: list[str] | None = None) -> int:
                 FORWARD_DEFLATOR_WEDGE_N_INDEPENDENT,
                 FORWARD_DEFLATOR_WEDGE_N_WINDOWS,
                 FORWARD_DEFLATOR_WEDGE_SD_PP,
+                MARGINAL_MARGIN_PP,
                 MEASURE_DISAGREEMENT_LIMIT_PP,
                 deflator_wedge_adjust,
                 deflator_wedge_forward,
@@ -617,7 +618,8 @@ def main(argv: list[str] | None = None) -> int:
                 # "Marginal" = the range band clears zero, but only just. The
                 # distinction matters: a sign that survives on 0.09pp of margin
                 # is not the same claim as one with 0.30pp behind it.
-                marginal = a["sign_callable"] and min(abs(a["low"]), abs(a["high"])) < 0.10
+                marginal = (a["sign_callable"]
+                            and min(abs(a["low"]), abs(a["high"])) < MARGINAL_MARGIN_PP)
                 verdicts[name] = ("marginal" if marginal
                                   else (a["sign"] or "not callable"))
                 print(

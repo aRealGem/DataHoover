@@ -398,6 +398,17 @@ def test_overlapping_window_count_is_not_independent_n():
     assert 3.0 <= FORWARD_DEFLATOR_WEDGE_N_INDEPENDENT <= 4.0
 
 
+def test_marginal_margin_is_derived_from_the_d1_limit():
+    """Round 4: derived, not a literal. If D1 moves, this moves with it."""
+    from datahoover.fiscal.derive import (
+        MARGINAL_MARGIN_PP,
+        MEASURE_DISAGREEMENT_LIMIT_PP,
+    )
+
+    assert MARGINAL_MARGIN_PP == pytest.approx(MEASURE_DISAGREEMENT_LIMIT_PP / 2.0)
+    assert MARGINAL_MARGIN_PP == pytest.approx(0.10)  # on today's D1 limit
+
+
 def test_forecaster_wedge_is_a_dated_constant_with_secondary_provenance():
     from datahoover.fiscal.derive import (
         FORWARD_DEFLATOR_WEDGE_CBO_BASIS,

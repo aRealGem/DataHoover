@@ -642,6 +642,12 @@ def deflator_wedge_forward(measured_rg_pp: Optional[float]) -> dict:
 # Below this the two forward measures agree well enough to read as one number.
 MEASURE_DISAGREEMENT_LIMIT_PP = 0.20
 
+# A sign that clears zero by less than this is reported "marginal" rather than
+# called outright. DERIVED from the disagreement limit, deliberately not a
+# literal: the margin a sign needs is half the spread we already refuse to read
+# as one number. If D1's limit ever moves, this moves with it.
+MARGINAL_MARGIN_PP = MEASURE_DISAGREEMENT_LIMIT_PP / 2.0
+
 
 @dataclass(frozen=True)
 class ForwardRow:
