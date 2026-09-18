@@ -85,13 +85,6 @@ run_ingest "ingest-fred-crypto" ingest-fred --source fred_crypto_fx
 run_ingest "ingest-bls" ingest-bls --source bls_truthbot_watchlist
 run_ingest "ingest-census" ingest-census --source census_acs_state_basic
 
-# GDELT LAST, deliberately. Its 429 retry schedule waits in MINUTES (60/300/900
-# plus jitter, four attempts, ~22 min worst case). Anywhere earlier in the list
-# and a GDELT stall delays every source behind it; the service is Type=oneshot
-# with a single TimeoutStartSec covering the whole run, so a stall late costs
-# only GDELT, while a stall early can cost the lot.
-run_ingest "ingest-gdelt" ingest-gdelt --source gdelt_democracy_24h
-
 echo "--- compute-signals ---"
 set +e
 "${HOOVER[@]}" compute-signals --since 7d
@@ -126,6 +119,36 @@ printf "%-36s %6s %s\n" "------------------------------------" "------" "------"
 for line in "${RESULTS[@]}"; do
   IFS='|' read -r step st code <<<"${line}"
   printf "%-36s %6s %s\n" "${step}" "${code}" "${st}"
+done
+
+
+# ---------------------------------------------------------------------------
+# GDELT runs AFTER the summary above, on purpose.
+#
+# Moving it last among the INGESTS was not enough: compute-signals, alert and
+# the summary table all still came after it, so a GDELT stall took those with
+# it. Its 429 retry schedule waits in minutes (60/300/900 plus jitter, four
+# attempts, ~22 min worst case) and the service is Type=oneshot, so a single
+# TimeoutStartSec covers the whole ExecStart.
+#
+# With it here, the report above is already complete and flushed before GDELT
+# is even attempted. If GDELT stalls to the timeout, everything else has
+# already been recorded. Its own result is appended below.
+# ---------------------------------------------------------------------------
+echo
+echo "--- ingest-gdelt (deferred: runs after the summary) ---"
+GDELT_RESULT="OK"
+run_ingest "ingest-gdelt" ingest-gdelt --source gdelt_democracy_24h || GDELT_RESULT="FAIL"
+
+echo
+echo "=== Summary addendum: deferred steps ==="
+printf "%-36s %6s %s\n" "STEP" "EXIT" "STATUS"
+printf "%-36s %6s %s\n" "------------------------------------" "------" "------"
+for line in "${RESULTS[@]}"; do
+  IFS='|' read -r step st code <<<"${line}"
+  case "${step}" in
+    ingest-gdelt) printf "%-36s %6s %s\n" "${step}" "${code}" "${st}" ;;
+  esac
 done
 
 echo
