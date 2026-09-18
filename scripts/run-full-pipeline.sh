@@ -75,7 +75,6 @@ run_ingest "ingest-ckan-datagov" ingest-ckan --source datagov_catalog_climate
 run_ingest "ingest-ckan-hdx" ingest-ckan --source hdx_catalog_cholera
 run_ingest "ingest-socrata" ingest-socrata --source socrata_example
 run_ingest "ingest-opendatasoft" ingest-opendatasoft --source opendatasoft_example
-run_ingest "ingest-gdelt" ingest-gdelt --source gdelt_democracy_24h
 run_ingest "ingest-ooni" ingest-ooni --source ooni_us_recent
 run_ingest "ingest-ioda" ingest-ioda --source caida_ioda_recent
 run_ingest "ingest-ripe-ris" ingest-ripe-ris --source ripe_ris_live_10s
@@ -85,6 +84,13 @@ run_ingest "ingest-fred-macro" ingest-fred --source fred_macro_watchlist
 run_ingest "ingest-fred-crypto" ingest-fred --source fred_crypto_fx
 run_ingest "ingest-bls" ingest-bls --source bls_truthbot_watchlist
 run_ingest "ingest-census" ingest-census --source census_acs_state_basic
+
+# GDELT LAST, deliberately. Its 429 retry schedule waits in MINUTES (60/300/900
+# plus jitter, four attempts, ~22 min worst case). Anywhere earlier in the list
+# and a GDELT stall delays every source behind it; the service is Type=oneshot
+# with a single TimeoutStartSec covering the whole run, so a stall late costs
+# only GDELT, while a stall early can cost the lot.
+run_ingest "ingest-gdelt" ingest-gdelt --source gdelt_democracy_24h
 
 echo "--- compute-signals ---"
 set +e
