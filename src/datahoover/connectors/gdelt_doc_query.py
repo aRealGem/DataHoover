@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -18,9 +19,30 @@ from ._retry import fetch_with_retry
 # was rate-limited too and the run reported fetched=0. 6s/12s/24s clears it.
 GDELT_BACKOFF_BASE_S = 6.0
 
+# Patient 429 schedule (ruling DH-CRUDE-001 round 4). GDELT's 429s here are
+# INTERMITTENT at one request per WEEK, with successes in between, so they are
+# not a persistent block caused by our own request rate. Whatever window GDELT
+# is enforcing is far longer than any doubling sequence off a 6s base reaches,
+# so retries are scheduled explicitly in minutes rather than guessed.
+# 6s remains the floor between any two requests.
+GDELT_RETRY_SCHEDULE_S = (60.0, 300.0, 900.0)
+GDELT_MAX_ATTEMPTS = 4
+GDELT_RETRY_JITTER_S = 15.0
+GDELT_MIN_SPACING_S = 6.0
+
 
 class GdeltResponseError(RuntimeError):
     """GDELT answered, but the body is not a result set we can trust."""
+
+
+class GdeltEmptyBody(GdeltResponseError):
+    """HTTP 200 with a well-formed but empty result set.
+
+    Retried ONCE. GDELT has been observed answering 200 with `{}` while
+    otherwise healthy, and a single empty answer is not trustworthy evidence
+    that the query genuinely matched nothing. If it is still empty on the
+    retry, the emptiness is real and is reported as such.
+    """
 
 
 class GdeltRateLimited(GdeltResponseError):
@@ -130,6 +152,53 @@ def fetch_gdelt_docs_json(
     return FetchResult(status_code=r.status_code, etag=new_etag, last_modified=new_last_modified, data=data, raw_bytes=raw)
 
 
+
+def _is_empty_result(fr) -> bool:
+    """A 200 whose payload carries no articles at all."""
+    if fr is None or fr.status_code == 304 or not isinstance(fr.data, dict):
+        return False
+    return not (fr.data.get("articles") or [])
+
+
+def fetch_gdelt_docs_patiently(url: str, *, etag=None, last_modified=None):
+    """Fetch with the patient 429 schedule, and retry ONE empty 200.
+
+    Two distinct patiences, for two distinct failure shapes:
+
+      429      -> minutes, not seconds. Scheduled 60/300/900s plus jitter, four
+                  attempts. GDELT's window here is far longer than any doubling
+                  sequence off a 6s base would reach.
+      empty 200 -> retried exactly once after the minimum spacing. A single
+                  empty answer is not trustworthy evidence that the query
+                  matched nothing; a second one is, and is reported as real.
+    """
+    def _once():
+        return fetch_gdelt_docs_json(url, etag=etag, last_modified=last_modified)
+
+    fr = fetch_with_retry(
+        _once,
+        max_attempts=GDELT_MAX_ATTEMPTS,
+        backoff_base=GDELT_BACKOFF_BASE_S,
+        schedule=GDELT_RETRY_SCHEDULE_S,
+        jitter=GDELT_RETRY_JITTER_S,
+    )
+    if _is_empty_result(fr):
+        print(f"[gdelt] empty result set on first read; retrying once after "
+              f"{GDELT_MIN_SPACING_S:.0f}s before believing it")
+        time.sleep(GDELT_MIN_SPACING_S)
+        fr = fetch_with_retry(
+            _once,
+            max_attempts=GDELT_MAX_ATTEMPTS,
+            backoff_base=GDELT_BACKOFF_BASE_S,
+            schedule=GDELT_RETRY_SCHEDULE_S,
+            jitter=GDELT_RETRY_JITTER_S,
+        )
+        if _is_empty_result(fr):
+            print("[gdelt] still empty on the retry - treating the empty result "
+                  "as real, not as a transient")
+    return fr
+
+
 def _normalize_docs(
     source: Source, docs: List[Dict[str, Any]], ingested_at: datetime
 ) -> List[Dict[str, Any]]:
@@ -173,9 +242,10 @@ def ingest_gdelt_doc_query(*, config_path: Path, source_name: str, data_dir: Pat
     run_id = str(uuid.uuid4())
 
     try:
-        fr = fetch_with_retry(
-            lambda: fetch_gdelt_docs_json(source.url, etag=state.get("etag"), last_modified=state.get("last_modified")),
-            backoff_base=GDELT_BACKOFF_BASE_S,
+        fr = fetch_gdelt_docs_patiently(
+            source.url,
+            etag=state.get("etag"),
+            last_modified=state.get("last_modified"),
         )
         init_db(db_path)
 

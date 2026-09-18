@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from typing import Callable, TypeVar
+from typing import Callable, Optional, Sequence, TypeVar
 
 import httpx
 
@@ -14,6 +14,8 @@ def fetch_with_retry(
     *,
     max_attempts: int = 3,
     backoff_base: float = 1.0,
+    schedule: Optional[Sequence[float]] = None,
+    jitter: float = 0.0,
 ) -> T:
     """
     Retry a fetch function with exponential backoff.
@@ -62,8 +64,18 @@ def fetch_with_retry(
                 raise
             last_exception = exc
         
-        # Exponential backoff: 1s, 2s, 4s, ...
-        sleep_time = backoff_base * (2 ** (attempt - 1))
+        # An explicit schedule wins over the exponential default. Some
+        # providers rate-limit on a window far longer than any sane doubling
+        # sequence reaches, and guessing at it with 2**n either gives up too
+        # early or waits absurdly long.
+        if schedule:
+            sleep_time = schedule[min(attempt - 1, len(schedule) - 1)]
+        else:
+            sleep_time = backoff_base * (2 ** (attempt - 1))
+        if jitter:
+            # Deterministic per-attempt jitter. Spreads retries without
+            # importing randomness, which would make runs unreproducible.
+            sleep_time += (attempt * 7919 % 1000) / 1000.0 * jitter
         time.sleep(sleep_time)
     
     # Should never reach here, but just in case
