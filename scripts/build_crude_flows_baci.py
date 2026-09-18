@@ -58,6 +58,20 @@ MEMBER_RE = re.compile(r"BACI_HS92_Y(\d{4})_V(\d+)\.csv$")
 # never silently dropped.
 UNIT_VALUE_LOW_MULTIPLE = 0.25
 
+# High side. A unit value far ABOVE the year median means the quantity is too
+# small for the value, the mirror of the low-side case. Measured across all 30
+# years the value carried by these rows is usually negligible, but 2019 (1.13%)
+# and 2020 (0.52%) both clear a 0.5% materiality bar, so they are flagged too.
+# They are NOT volume-substituted: an overstated unit value means understated
+# tonnage, and a value-derived fill would make the arrow bigger on the strength
+# of the very field that looks wrong.
+UNIT_VALUE_HIGH_MULTIPLE = 2.0
+
+# An origin needs at least this many clean rows in a year before its own median
+# is trustworthy enough to derive volumes from; below it, fall back to the world
+# median for that year and record which basis was used.
+MIN_CLEAN_ROWS_FOR_ORIGIN_MEDIAN = 3
+
 
 def load_country_map(z: zipfile.ZipFile) -> dict[int, dict]:
     raw = z.read("country_codes_V202601.csv").decode("utf-8", errors="replace")
@@ -128,35 +142,66 @@ def main() -> None:
     flows: list[dict] = []
     for year, member in members:
         rows = stream_crude(z, member, year)
-        # export_share is computed per origin per year, over the origin's TOTAL
-        # observed crude exports -- never over the subset of arrows we happen to
-        # draw, which would force the shares to 100% and hide missing volume.
-        origin_total = defaultdict(float)
-        for r in rows:
-            if r["q_tonnes"]:
-                origin_total[r["i"]] += r["q_tonnes"]
         # Year median implied unit value: the anchor the guard measures against.
         uvs = [(r["v_thousand_usd"] * 1000.0 / r["q_tonnes"])
                for r in rows if r["q_tonnes"] and r["v_thousand_usd"] and r["q_tonnes"] > 0]
         median_uv = statistics.median(uvs) if uvs else None
 
+        # Per-origin medians, VOLUME-WEIGHTED over that origin's clean rows.
+        # A crude exporter's own realised price differs from the world median --
+        # heavy sour sells below light sweet -- so deriving a volume from the
+        # world median systematically mis-sizes the arrow. Weighting by volume
+        # stops a handful of tiny cargoes setting the price for a whole origin.
+        clean_by_origin: dict[int, list[tuple[float, float]]] = defaultdict(list)
+        for r in rows:
+            q, v = r["q_tonnes"], r["v_thousand_usd"]
+            if not (q and v and q > 0 and median_uv):
+                continue
+            uv = v * 1000.0 / q
+            if median_uv * UNIT_VALUE_LOW_MULTIPLE <= uv <= median_uv * UNIT_VALUE_HIGH_MULTIPLE:
+                clean_by_origin[r["i"]].append((uv, q))
+
+        origin_uv: dict[int, float] = {}
+        for code, pairs in clean_by_origin.items():
+            if len(pairs) < MIN_CLEAN_ROWS_FOR_ORIGIN_MEDIAN:
+                continue
+            pairs.sort()
+            half = sum(q for _, q in pairs) / 2.0
+            run = 0.0
+            for uv, q in pairs:
+                run += q
+                if run >= half:
+                    origin_uv[code] = uv
+                    break
+
+        staged: list[dict] = []
         for r in rows:
             q = r["q_tonnes"]
             v = r["v_thousand_usd"]
             uv = (v * 1000.0 / q) if (q and v and q > 0) else None
+            missing_q = not q
             suspect = bool(median_uv and uv is not None
                            and uv < median_uv * UNIT_VALUE_LOW_MULTIPLE)
+            high = bool(median_uv and uv is not None
+                        and uv > median_uv * UNIT_VALUE_HIGH_MULTIPLE)
             mbd = (q * BBL_PER_TONNE / 365.0 / 1e6) if q else None
-            # For a suspect row, re-derive tonnage from the value at the year's
-            # median price -- the value leg is the one that looks sane.
+
+            # Derive from the ORIGIN's own median where that origin has enough
+            # clean rows to have one; otherwise the world median, recorded.
+            basis_uv, basis = origin_uv.get(r["i"]), "origin"
+            if basis_uv is None:
+                basis_uv, basis = median_uv, "world"
             mbd_val = None
-            if median_uv and v:
-                mbd_val = (v * 1000.0 / median_uv) * BBL_PER_TONNE / 365.0 / 1e6
-            best = mbd_val if (suspect and mbd_val is not None) else mbd
-            tot = origin_total.get(r["i"]) or 0.0
-            share = (100.0 * q / tot) if (q and tot) else None
+            if basis_uv and v:
+                mbd_val = (v * 1000.0 / basis_uv) * BBL_PER_TONNE / 365.0 / 1e6
+
+            # SUBSTITUTE, never suppress -- for a bad quantity AND for a missing
+            # one. A row with no tonnage at all is the same problem in its limit
+            # case, and dropping it would silently shrink the origin's total.
+            best = mbd_val if ((suspect or missing_q) and mbd_val is not None) else mbd
             oi, di = cmap.get(r["i"], {}), cmap.get(r["j"], {})
-            flows.append({
+            staged.append({
+                "_origin_code": r["i"],
                 "year": year,
                 "origin_iso3": oi.get("iso3") or f"M49:{r['i']}",
                 "origin_name": oi.get("name") or f"(code {r['i']})",
@@ -169,13 +214,37 @@ def main() -> None:
                 "implied_usd_per_tonne": round(uv, 2) if uv is not None else None,
                 "year_median_usd_per_tonne": round(median_uv, 2) if median_uv else None,
                 "quantity_suspect": suspect,
+                "quantity_missing": missing_q,
+                "unit_value_high": high,
+                "derived_basis": basis if (suspect or missing_q) else None,
+                "value_derived": bool((suspect or missing_q) and mbd_val is not None),
+                # UI contract: any value-derived arrow renders DASHED and carries
+                # the badge, so a reader can never mistake it for a measured one.
+                "render_hint": ("dashed" if (suspect or missing_q) else "solid"),
+                "render_badge": ("volume value-derived"
+                                 if (suspect or missing_q) else None),
                 "value_thousand_usd": v,
-                "share_of_origin_exports_pct": round(share, 3) if share is not None else None,
+                "share_of_origin_exports_pct": None,   # filled in pass 2
                 # Vintage badge: every arrow states what it is, so an annual
                 # figure can never be read alongside a monthly one by accident.
                 "vintage": f"annual {year}",
                 "vintage_grain": "annual",
             })
+        # PASS 2. export_share denominators use GUARDED volumes, so a bad
+        # quantity cannot inflate its own origin's total and deflate every
+        # sibling share. Still the origin's TOTAL observed exports, never the
+        # subset of arrows drawn -- that would force the shares to 100% and
+        # hide missing volume.
+        origin_total_mbd = defaultdict(float)
+        for f in staged:
+            origin_total_mbd[f["_origin_code"]] += f["mb_per_day_best"] or 0.0
+        for f in staged:
+            tot = origin_total_mbd.get(f["_origin_code"]) or 0.0
+            mine = f["mb_per_day_best"] or 0.0
+            f["share_of_origin_exports_pct"] = (
+                round(100.0 * mine / tot, 3) if (mine and tot) else None)
+            f.pop("_origin_code", None)
+        flows.extend(staged)
         print(f"  {year}: {len(rows):>5} crude pairs")
 
     latest = max(f["year"] for f in flows)
@@ -203,7 +272,8 @@ def main() -> None:
             "coverage_years": [members[0][0], members[-1][0]],
             "original_units": "value thousand USD; quantity metric tons",
             "transformation": (f"mb/d = tonnes x {BBL_PER_TONNE} bbl/tonne / 365 / 1e6; "
-                               f"export_share = pair tonnes / origin total tonnes"),
+                               f"export_share = pair GUARDED volume / origin total "
+                               f"GUARDED volume (bad quantities cannot inflate a denominator)"),
             "conversion_factor_bbl_per_tonne": BBL_PER_TONNE,
             "conversion_error_pct": BBL_PER_TONNE_ERROR_PCT,
             "conversion_caveat": (
