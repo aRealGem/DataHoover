@@ -93,9 +93,9 @@ url = "http://data.gdeltproject.org/gdeltv2/lastupdate.txt"
 description = "GDELT 2.0 Global Knowledge Graph latest 15-min drop (per-article V2Tone, V2Themes, V2Persons, V2Locations, V2Organizations). Heavyweight: ~50-150 MB unzipped per run, ~50-200k rows. Conditional on the lastupdate filename advancing."
 license = "CC-BY-NC-SA-4.0"
 redistribute = "non-commercial"
-status = "DEGRADED"
+status = "FROZEN-UNTESTED"
 status_since = "2026-09-19"
-status_note = "DEGRADED 2026-09-19 (CW-204). Four consecutive HTTP 429s on the scheduled path (2026-09-05, 09-12, and both 09-19 attempts). The last of those was a full patient run -- 1338s, ~22.3 min, the 60/300/900s + jitter schedule engaged end to end at the documented 1-request-per-5-seconds spacing -- and still got 429, so the block is not our request cadence. Last ingest that returned data: 2026-08-22 (50 rows). A 2026-09-16 manual probe is logged status=ok but with n_total=0 -- HTTP 200 carrying zero articles -- so the ingest_runs 'ok' on that date is not a working feed. Cause undetermined; a routing test (off-network browser vs. home-network browser) is outstanding and is jackie's to run. The weekly timer no longer touches any GDELT source: the single pipeline step (gdelt_democracy_24h) was dropped from scripts/run-full-pipeline.sh on 2026-09-19, and the other two GDELT sources were never on the scheduled path. Connector code and tests are intact -- run by hand with ./run-ingest.sh if you want to retest."
+status_note = "FROZEN-UNTESTED 2026-09-19 (CW-204, ruling DH-CRUDE-002-R1). This source is NOT the doc API: it reads data.gdeltproject.org (the GKG 15-minute file drop), a DIFFERENT HOST from the api.gdeltproject.org endpoint that returned the four 429s. It has NOT been tested against the outage and no claim is made about its availability either way -- do not read the doc-API evidence as applying here. Frozen alongside the doc-API sources purely as a precaution while GDELT is under a no-request freeze. NO REQUESTS TO EITHER HOST. It was never on the scheduled path in any case. Connector code and tests are intact."
 
 [[sources]]
 name = "ooni_us_recent"

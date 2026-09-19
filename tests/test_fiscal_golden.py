@@ -71,7 +71,28 @@ REQUIRED_SERIES = ("GDP", "FYGFDPUB", "FYOINT", "FYFSD")
 
 
 def _warehouse_path() -> Path:
-    return Path(os.environ.get("DATAHOOVER_FISCAL_DB", "data/warehouse.duckdb"))
+    """Resolve the fiscal warehouse, preferring one that is actually populated.
+
+    These six golden tests were silently skipping on every default run. The
+    fiscal series live in `data/fiscal_golden_*.duckdb`, not in
+    `data/warehouse.duckdb`, and the default pointed at the latter -- which
+    has the table but zero rows. The skip reason said "NOT VERIFIED", which
+    was true and invisible: a green suite with the entire fiscal derive chain
+    unchecked.
+
+    Order: an explicit DATAHOOVER_FISCAL_DB always wins; then the default
+    warehouse if it carries the series; then the newest golden snapshot. A
+    bare checkout still skips, honestly, because the data genuinely is not
+    there -- the snapshots are gitignored (~6.8 MB of DuckDB).
+    """
+    explicit = os.environ.get("DATAHOOVER_FISCAL_DB")
+    if explicit:
+        return Path(explicit)
+    default = Path("data/warehouse.duckdb")
+    if default.exists() and read_fiscal_raw_panel(default).get(REQUIRED_SERIES[0]):
+        return default
+    snapshots = sorted(Path("data").glob("fiscal_golden_*.duckdb"))
+    return snapshots[-1] if snapshots else default
 
 
 @pytest.fixture(scope="module")
