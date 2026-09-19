@@ -181,6 +181,7 @@ def fetch_gdelt_docs_patiently(url: str, *, etag=None, last_modified=None):
         backoff_base=GDELT_BACKOFF_BASE_S,
         schedule=GDELT_RETRY_SCHEDULE_S,
         jitter=GDELT_RETRY_JITTER_S,
+        retry_on=(GdeltRateLimited,),
     )
     if _is_empty_result(fr):
         print(f"[gdelt] empty result set on first read; retrying once after "
@@ -192,6 +193,7 @@ def fetch_gdelt_docs_patiently(url: str, *, etag=None, last_modified=None):
             backoff_base=GDELT_BACKOFF_BASE_S,
             schedule=GDELT_RETRY_SCHEDULE_S,
             jitter=GDELT_RETRY_JITTER_S,
+            retry_on=(GdeltRateLimited,),
         )
         if _is_empty_result(fr):
             print("[gdelt] still empty on the retry - treating the empty result "
