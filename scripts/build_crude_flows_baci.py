@@ -39,7 +39,27 @@ CRUDE_HS = "270900"
 # factor carries about +/-4% on any individual origin-destination pair. It is
 # better than the alternative of not converting, but it is NOT precision.
 BBL_PER_TONNE = 7.33
-BBL_PER_TONNE_ERROR_PCT = 4.0
+# Superseded: this was documented as a "~+/-4% grade error", reasoning from
+# crude density alone. MEASURED against EIA-814 for 2024, top-10 US origins,
+# the real cross-source spread is far wider and is NOT grade-driven -- Canada,
+# the heaviest large-volume origin, sits at 1.014 while Saudi medium and
+# Venezuelan extra-heavy are within 0.01 of each other. Per-origin factors were
+# considered and REJECTED: fitting them would encode a definitional mismatch as
+# if it were physics.
+BBL_PER_TONNE_ERROR_PCT = 15.0
+CROSS_SOURCE_BAND = {
+    "per_origin_pct": 15.0,
+    "aggregate_pct": 3.0,
+    "measured_against": "EIA-814 2024 annual, top-10 US origins",
+    "aggregate_ratio": 1.033,          # BACI 6.311 vs EIA-814 6.111 mb/d
+    "per_origin_range": [0.62, 1.16],
+    "sample_caveat": "US-inbound sample only; no equivalent check exists elsewhere",
+    "known_driver": (
+        "definitional, not units. Transshipment is the clearest case: BACI books "
+        "42.8% of Ecuador's 2024 crude to PANAMA and records no PAN->USA leg at "
+        "all, while EIA-814 records those barrels arriving as Ecuadorian. That "
+        "alone accounts for the ECU ratio of 0.62."),
+}
 
 MEMBER_RE = re.compile(r"BACI_HS92_Y(\d{4})_V(\d+)\.csv$")
 
@@ -276,10 +296,11 @@ def main() -> None:
                                f"GUARDED volume (bad quantities cannot inflate a denominator)"),
             "conversion_factor_bbl_per_tonne": BBL_PER_TONNE,
             "conversion_error_pct": BBL_PER_TONNE_ERROR_PCT,
+            "conversion_error_basis": "measured cross-source, not derived from density",
             "conversion_caveat": (
-                f"A single global {BBL_PER_TONNE} bbl/tonne factor carries about "
-                f"+/-{BBL_PER_TONNE_ERROR_PCT}% per pair because crude density is "
-                "grade-dependent (~7.0 heavy sour to ~7.6 light sweet)."),
+                "cross-source uncertainty roughly +/-15% per origin, ~3% in "
+                "aggregate; US-inbound sample only"),
+            "cross_source_band": CROSS_SOURCE_BAND,
             "mirror_fill": (
                 "NONE. BACI already reconciles exporter and importer declarations, "
                 "so a hand-rolled mirror fill would double-count that work."),
