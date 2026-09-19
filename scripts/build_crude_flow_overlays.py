@@ -66,7 +66,33 @@ MIN_BASELINE_FOR_PCT = 0.05   # mb/d
 # count. Coverage is volume-weighted instead -- see coverage_by_period().
 COVERAGE_THRESHOLD = 0.95
 
+# Ruling DH-CRUDE-002-R1 D2c. A pair whose reporter stopped filing keeps a
+# delta forever otherwise, quietly presented as current. If the three window
+# periods are not all inside the last STALE_HORIZON periods of the panel, the
+# delta is marked stale and must not be shown as a current figure.
+STALE_HORIZON = 6
+
+# R1 D2d. The nrg_ti_oilm panel is NOT the EU: it carries Turkiye, Georgia,
+# Norway and others. Anything labelled "EU" must be EU27-only, so the flag
+# lives on the data and the overlay is labelled "Eurostat reporters".
+EU27 = frozenset({
+    "AUT", "BEL", "BGR", "HRV", "CYP", "CZE", "DNK", "EST", "FIN", "FRA",
+    "DEU", "GRC", "HUN", "IRL", "ITA", "LVA", "LTU", "LUX", "MLT", "NLD",
+    "POL", "PRT", "ROU", "SVK", "SVN", "ESP", "SWE",
+})
+
 EUROSTAT_CACHE = RAW / "eurostat_nrg_ti_oilm_last40.json"
+
+# EIA-814 names two origins in a way BACI's table cannot match. "CONGO
+# (KINSHASA)" is the DRC (Kinshasa is its capital; BACI calls it "Dem. Rep. of
+# the Congo"), and BACI ships "Cote d'Ivoire" DOUBLE-ENCODED, so an uppercase
+# comparison never reaches it. Both were being dropped silently: 3,833 kbbl of
+# US-inbound crude across 30 months vanished from the totals. A test asserts
+# this dict stays complete, so a newly-named origin fails loudly.
+EIA_NAME_OVERRIDES = {
+    "CONGO (KINSHASA)": "COD",
+    "COTE D'IVOIRE (IVORY COAST)": "CIV",
+}
 EUROSTAT_API = (
     "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/nrg_ti_oilm"
 )
@@ -144,20 +170,90 @@ def coverage_by_period(
     return out
 
 
+def filed_periods(
+    series: dict[tuple[str, str], dict[str, float]], periods: list[str]
+) -> dict[str, set[str]]:
+    """Periods in which each destination reporter filed anything at all.
+
+    R1 D2a. For Eurostat an absent pair-month is only a real zero if that
+    reporter filed SOMETHING that month; if the reporter is silent the month
+    is UNKNOWN and must leave the average entirely rather than be counted as
+    no flow. EIA-814 is a single census and keeps zero-fill, which it gets by
+    being handed every period as "filed".
+    """
+    out: dict[str, set[str]] = defaultdict(set)
+    for (_o, dest), by_period in series.items():
+        for p, mbd in by_period.items():
+            if mbd:
+                out[dest].add(p)
+    return out
+
+
+def select_windows(
+    base_periods: list[str], all_periods: list[str], filed: set[str], trailing: int
+) -> tuple[list[str], list[str]]:
+    """(baseline, trailing) windows for one pair, restricted to filed periods.
+
+    R1 D2b. The trailing window is the last `trailing` periods in which THIS
+    pair's reporter filed -- not the last N on the calendar -- so a reporter
+    that files quarterly is compared against its own most recent filings
+    rather than against months it was never going to report.
+    """
+    base_used = [p for p in base_periods if p in filed]
+    trail_used = [p for p in all_periods if p in filed][-trailing:]
+    return base_used, trail_used
+
+
 def build_delta(
     origin: str, dest: str, series: dict[str, float],
     base_periods: list[str], trail_periods: list[str],
-    source: str, basis_note: str,
+    source: str, basis_note: str, *,
+    all_periods: list[str] | None = None,
+    base_expected: int = 12,
 ) -> dict:
     """One same-source delta row: trailing-N average vs the same source's 2024."""
+    if not base_periods or not trail_periods:
+        return {
+            "origin_iso3": origin, "destination_iso3": dest, "source": source,
+            "is_eu27_reporter": dest in EU27,
+            "baseline_period": None, "baseline_months": 0,
+            "baseline_partial": True, "baseline_mb_per_day": None,
+            "trailing_period": None, "trailing_mb_per_day": None,
+            "delta_mb_per_day": None, "delta_pct": None,
+            "delta_pct_suppressed": True,
+            "delta_pct_suppressed_reason": "no filed periods on one or both sides",
+            "is_stale": True,
+            "stale_reason": "reporter filed nothing usable in this window",
+            "delta_basis": basis_note + " NO DELTA: the reporter filed nothing "
+                           "usable on one or both sides, so no comparison exists.",
+        }
+
     base = mean_rate(series, base_periods)
     trail = mean_rate(series, trail_periods)
     thin = base < MIN_BASELINE_FOR_PCT
+
+    # D2c staleness: every window period must sit inside the recent horizon.
+    recent = set((all_periods or [])[-STALE_HORIZON:])
+    stale = bool(recent) and not set(trail_periods) <= recent
+    partial = len(base_periods) < 9
+
+    basis = basis_note
+    if partial:
+        basis += (f" PARTIAL BASELINE ({len(base_periods)}/{base_expected} months "
+                  "filed): the reporter was silent for the rest, and silent months "
+                  "are excluded rather than counted as zero.")
+    if stale:
+        basis += (f" STALE: the trailing window reaches back beyond the last "
+                  f"{STALE_HORIZON} periods, so this is NOT a current figure.")
+
     return {
         "origin_iso3": origin,
         "destination_iso3": dest,
         "source": source,
+        "is_eu27_reporter": dest in EU27,
         "baseline_period": f"{base_periods[0]}..{base_periods[-1]}",
+        "baseline_months": len(base_periods),
+        "baseline_partial": partial,
         "baseline_mb_per_day": round(base, 6),
         "trailing_period": f"{trail_periods[0]}..{trail_periods[-1]}",
         "trailing_mb_per_day": round(trail, 6),
@@ -168,7 +264,12 @@ def build_delta(
             f"baseline {base:.4f} mb/d is below the {MIN_BASELINE_FOR_PCT} mb/d floor; "
             "a percentage on a flow this thin is noise -- read the absolute change"
         ) if thin else None,
-        "delta_basis": basis_note,
+        "is_stale": stale,
+        "stale_reason": (
+            f"trailing window {trail_periods[0]}..{trail_periods[-1]} is not wholly "
+            f"within the last {STALE_HORIZON} periods of the panel"
+        ) if stale else None,
+        "delta_basis": basis,
     }
 
 
@@ -176,7 +277,9 @@ def build_delta(
 # EIA-814, US inbound
 # --------------------------------------------------------------------------
 
-def read_eia814(path: Path, by_name: dict[str, str]) -> tuple[str, dict[str, float]]:
+def read_eia814(
+    path: Path, by_name: dict[str, str]
+) -> tuple[str, dict[str, float], set[str]]:
     z = zipfile.ZipFile(path)
     ss = []
     if "xl/sharedStrings.xml" in z.namelist():
@@ -203,7 +306,7 @@ def read_eia814(path: Path, by_name: dict[str, str]) -> tuple[str, dict[str, flo
         if r[ix["PROD_CODE"]] != EIA_CRUDE_PROD_CODE:
             continue
         name = (r[ix["CNTRY_NAME"]] or "").strip().upper()
-        iso3 = by_name.get(name)
+        iso3 = by_name.get(name) or EIA_NAME_OVERRIDES.get(name)
         if not iso3:
             unmapped.add(name)
             continue
@@ -212,9 +315,9 @@ def read_eia814(path: Path, by_name: dict[str, str]) -> tuple[str, dict[str, flo
         except ValueError:
             continue
     if unmapped:
-        print(f"  [eia814] {len(unmapped)} origin names unmapped: "
-              f"{sorted(unmapped)[:6]}")
-    return period, {k: kbbl_to_mbd(v, period) for k, v in totals.items()}
+        print(f"  [eia814] {len(unmapped)} origin names UNMAPPED (volume dropped): "
+              f"{sorted(unmapped)}")
+    return period, {k: kbbl_to_mbd(v, period) for k, v in totals.items()}, unmapped
 
 
 # --------------------------------------------------------------------------
@@ -285,8 +388,10 @@ def main() -> None:
     # ---------------- EIA-814, US inbound ----------------
     print("EIA-814 (US inbound):")
     eia: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
+    eia_unmapped: set[str] = set()
     for path in sorted(RAW.glob("eia814_*.xlsx")):
-        period, totals = read_eia814(path, by_name)
+        period, totals, unmapped = read_eia814(path, by_name)
+        eia_unmapped |= unmapped
         for o, mbd in totals.items():
             eia[(o, "USA")][period] = mbd
         print(f"  {period}: {len(totals)} origins, {sum(totals.values()):.3f} mb/d")
@@ -324,8 +429,6 @@ def main() -> None:
     eia_base = [p for p in eia_periods if p.startswith(str(BASELINE_YEAR))]
     eia_trail = eia_periods[-TRAILING_MONTHS:]
     es_base = [p for p in es_periods if p.startswith(str(BASELINE_YEAR))]
-    es_ok = [p for p in es_periods if p not in incomplete]
-    es_trail = es_ok[-TRAILING_MONTHS:]
 
     if len(eia_base) < 12:
         print(f"  [warn] EIA-814 2024 baseline has {len(eia_base)}/12 months")
@@ -337,30 +440,47 @@ def main() -> None:
         f"({eia_trail[0]}..{eia_trail[-1]}) vs EIA-814 {BASELINE_YEAR} mean "
         f"({eia_base[0]}..{eia_base[-1]}). SAME SOURCE both sides. "
         "Volume-weighted: total barrels / total days, so month length cannot "
-        "tilt the average. An origin-month with no reported cargo counts as "
-        "zero. EIA-814 reports volume directly in barrels -- no tonnes "
-        "conversion is involved on either side."
+        "tilt the average. EIA-814 is a single census, so an origin-month with "
+        "no cargo is a real zero and is counted as one. It reports barrels "
+        "directly -- no tonnes conversion on either side."
     )
     es_basis = (
-        f"Eurostat nrg_ti_oilm trailing {len(es_trail)}-month mean "
-        f"({es_trail[0]}..{es_trail[-1]}, coverage-passing periods only) vs "
-        f"Eurostat {BASELINE_YEAR} mean ({es_base[0]}..{es_base[-1]}). "
-        "SAME SOURCE both sides. Volume-weighted: total volume / total days. "
-        "ASSUMPTION: Eurostat publishes mass (THS_T); every mb/d here converts "
-        f"tonnes to barrels at a single global {BBL_PER_TONNE} bbl/tonne. That "
-        "factor is an assumption, not a measurement, and it does not vary by "
-        "grade -- a heavy-crude lane is overstated in barrels and a light one "
-        "understated. The RATIO is insensitive to it (it cancels between the "
-        "two sides); the ABSOLUTE mb/d figures are not."
+        f"Eurostat nrg_ti_oilm trailing {TRAILING_MONTHS}-filing mean vs "
+        f"Eurostat {BASELINE_YEAR} mean. SAME SOURCE both sides. "
+        "Volume-weighted: total volume / total days. UNKNOWN IS NOT ZERO: a "
+        "month in which this reporter filed nothing at all is excluded from "
+        "both the volume and the days, because Eurostat silence means "
+        "unreported, not no-flow. A month the reporter DID file but without "
+        "this partner is a real zero and is counted. "
+        f"ASSUMPTION: Eurostat publishes mass (THS_T); every mb/d converts at a "
+        f"single global {BBL_PER_TONNE} bbl/tonne. That factor is an assumption, "
+        "not a measurement, and does not vary by grade. The RATIO is insensitive "
+        "to it (it cancels between the two sides); the ABSOLUTE mb/d is not."
     )
 
-    deltas = [build_delta(o, d, bp, eia_base, eia_trail, "EIA-814", eia_basis)
-              for (o, d), bp in sorted(eia.items())]
-    deltas += [build_delta(o, d, bp, es_base, es_trail, "Eurostat nrg_ti_oilm", es_basis)
-               for (o, d), bp in sorted(es.items())]
+    # EIA-814 is a single census: hand it every period as "filed" so absent
+    # origin-months keep zero-fill semantics (D2a).
+    deltas = [
+        build_delta(o, d, bp, eia_base, eia_trail, "EIA-814", eia_basis,
+                    all_periods=eia_periods, base_expected=12)
+        for (o, d), bp in sorted(eia.items())
+    ]
+    es_filed = filed_periods(es, es_periods)
+    for (o, d), bp in sorted(es.items()):
+        base_used, trail_used = select_windows(
+            es_base, es_periods, es_filed.get(d, set()), TRAILING_MONTHS)
+        deltas.append(build_delta(o, d, bp, base_used, trail_used,
+                                  "Eurostat nrg_ti_oilm", es_basis,
+                                  all_periods=es_periods, base_expected=len(es_base)))
+
     suppressed = sum(1 for d in deltas if d["delta_pct_suppressed"])
-    print(f"\ndeltas: {len(deltas)} pairs; {suppressed} with the percentage "
-          f"suppressed (baseline < {MIN_BASELINE_FOR_PCT} mb/d)")
+    stale = sum(1 for d in deltas if d["is_stale"])
+    partial = sum(1 for d in deltas if d["baseline_partial"])
+    eu27 = sum(1 for d in deltas if d["is_eu27_reporter"])
+    print(f"\ndeltas: {len(deltas)} pairs; {suppressed} pct-suppressed "
+          f"(baseline < {MIN_BASELINE_FOR_PCT} mb/d); {stale} stale; "
+          f"{partial} on a partial baseline; {eu27} EU27 reporters, "
+          f"{len(deltas)-eu27} non-EU27")
 
     # ---------------- monthly levels ----------------
     overlays: list[dict] = []
@@ -371,6 +491,7 @@ def main() -> None:
                 "vintage": f"monthly {per}", "vintage_grain": "monthly",
                 "source": "EIA-814", "mb_per_day": round(bp[per], 6),
                 "coverage_pct": None, "period_incomplete": False,
+                "is_eu27_reporter": False,
             })
     for (o, d), bp in sorted(es.items()):
         for per in sorted(bp):
@@ -380,6 +501,7 @@ def main() -> None:
                 "source": "Eurostat nrg_ti_oilm", "mb_per_day": round(bp[per], 6),
                 "coverage_pct": round(coverage[per] * 100, 2),
                 "period_incomplete": per in incomplete,
+                "is_eu27_reporter": d in EU27,
             })
 
     bundle = {
@@ -404,6 +526,15 @@ def main() -> None:
             ),
             "pct_floor_mb_per_day": MIN_BASELINE_FOR_PCT,
             "pct_suppressed_rows": suppressed,
+            "stale_horizon_periods": STALE_HORIZON,
+            "stale_rows": stale,
+            "partial_baseline_rows": partial,
+            "unknown_is_not_zero": (
+                "Eurostat only: a month in which a reporter filed nothing is "
+                "excluded from that pair's volume AND days. A month it filed "
+                "without this partner is a real zero. EIA-814 is a single "
+                "census and keeps zero-fill throughout."
+            ),
             "rows": deltas,
         },
         "coverage": {
@@ -416,6 +547,12 @@ def main() -> None:
             ),
             "threshold_pct": COVERAGE_THRESHOLD * 100,
             "applies_to": "Eurostat nrg_ti_oilm only; EIA-814 is a single reporter",
+            "panel_label": (
+                "THIS PANEL IS NOT THE EU. nrg_ti_oilm carries non-EU27 "
+                "reporters including TUR, GEO and NOR. Label any aggregate "
+                "'Eurostat reporters'; use is_eu27_reporter to filter when a "
+                "figure is presented as EU27."
+            ),
             "caveat": (
                 "the first 11 periods have a truncated trailing window -- the "
                 "weights are computed over fewer months for every reporter "
