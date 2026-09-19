@@ -71,6 +71,9 @@ url = "https://api.gdeltproject.org/api/v2/doc/doc?query=democracy&mode=artlist&
 description = "GDELT doc API article list (last 24h, 50 records). Article-level metadata only — note: the live API no longer returns per-article tone in artlist mode, so this feed contributes article volume but not tone scores. Use `gdelt_democracy_timelinetone` (timelinetone mode) for tone, or `gdelt_gkg_15min` for per-article tone via GKG."
 license = "CC-BY-NC-SA-4.0"
 redistribute = "non-commercial"
+status = "DEGRADED"
+status_since = "2026-09-19"
+status_note = "DEGRADED 2026-09-19 (CW-204). Four consecutive HTTP 429s on the scheduled path (2026-09-05, 09-12, and both 09-19 attempts). The last of those was a full patient run -- 1338s, ~22.3 min, the 60/300/900s + jitter schedule engaged end to end at the documented 1-request-per-5-seconds spacing -- and still got 429, so the block is not our request cadence. Last ingest that returned data: 2026-08-22 (50 rows). A 2026-09-16 manual probe is logged status=ok but with n_total=0 -- HTTP 200 carrying zero articles -- so the ingest_runs 'ok' on that date is not a working feed. Cause undetermined; a routing test (off-network browser vs. home-network browser) is outstanding and is jackie's to run. The weekly timer no longer touches any GDELT source: the single pipeline step (gdelt_democracy_24h) was dropped from scripts/run-full-pipeline.sh on 2026-09-19, and the other two GDELT sources were never on the scheduled path. Connector code and tests are intact -- run by hand with ./run-ingest.sh if you want to retest."
 
 [[sources]]
 name = "gdelt_democracy_timelinetone"
@@ -79,6 +82,9 @@ url = "https://api.gdeltproject.org/api/v2/doc/doc?query=democracy&mode=timeline
 description = "GDELT doc API timelinetone for 'democracy' (last 7 days, 15-min bucket aggregate tone). Feeds the `sentiment_tone` signal producer with already-aggregated per-bucket tone values."
 license = "CC-BY-NC-SA-4.0"
 redistribute = "non-commercial"
+status = "DEGRADED"
+status_since = "2026-09-19"
+status_note = "DEGRADED 2026-09-19 (CW-204). Four consecutive HTTP 429s on the scheduled path (2026-09-05, 09-12, and both 09-19 attempts). The last of those was a full patient run -- 1338s, ~22.3 min, the 60/300/900s + jitter schedule engaged end to end at the documented 1-request-per-5-seconds spacing -- and still got 429, so the block is not our request cadence. Last ingest that returned data: 2026-08-22 (50 rows). A 2026-09-16 manual probe is logged status=ok but with n_total=0 -- HTTP 200 carrying zero articles -- so the ingest_runs 'ok' on that date is not a working feed. Cause undetermined; a routing test (off-network browser vs. home-network browser) is outstanding and is jackie's to run. The weekly timer no longer touches any GDELT source: the single pipeline step (gdelt_democracy_24h) was dropped from scripts/run-full-pipeline.sh on 2026-09-19, and the other two GDELT sources were never on the scheduled path. Connector code and tests are intact -- run by hand with ./run-ingest.sh if you want to retest."
 
 [[sources]]
 name = "gdelt_gkg_15min"
@@ -87,6 +93,9 @@ url = "http://data.gdeltproject.org/gdeltv2/lastupdate.txt"
 description = "GDELT 2.0 Global Knowledge Graph latest 15-min drop (per-article V2Tone, V2Themes, V2Persons, V2Locations, V2Organizations). Heavyweight: ~50-150 MB unzipped per run, ~50-200k rows. Conditional on the lastupdate filename advancing."
 license = "CC-BY-NC-SA-4.0"
 redistribute = "non-commercial"
+status = "DEGRADED"
+status_since = "2026-09-19"
+status_note = "DEGRADED 2026-09-19 (CW-204). Four consecutive HTTP 429s on the scheduled path (2026-09-05, 09-12, and both 09-19 attempts). The last of those was a full patient run -- 1338s, ~22.3 min, the 60/300/900s + jitter schedule engaged end to end at the documented 1-request-per-5-seconds spacing -- and still got 429, so the block is not our request cadence. Last ingest that returned data: 2026-08-22 (50 rows). A 2026-09-16 manual probe is logged status=ok but with n_total=0 -- HTTP 200 carrying zero articles -- so the ingest_runs 'ok' on that date is not a working feed. Cause undetermined; a routing test (off-network browser vs. home-network browser) is outstanding and is jackie's to run. The weekly timer no longer touches any GDELT source: the single pipeline step (gdelt_democracy_24h) was dropped from scripts/run-full-pipeline.sh on 2026-09-19, and the other two GDELT sources were never on the scheduled path. Connector code and tests are intact -- run by hand with ./run-ingest.sh if you want to retest."
 
 [[sources]]
 name = "ooni_us_recent"
