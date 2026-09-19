@@ -134,3 +134,52 @@ def test_schedule_shorter_than_attempts_reuses_its_last_step(monkeypatch):
         fetch_with_retry(always_429, max_attempts=5, schedule=(10.0, 20.0), jitter=0.0)
 
     assert slept == [10.0, 20.0, 20.0, 20.0]
+
+
+def test_retry_on_catches_connector_specific_errors(monkeypatch):
+    """A connector that translates an HTTP status into its OWN exception type is
+    invisible to the httpx branches. That is precisely how the GDELT 429 path
+    bypassed its own 60/300/900 schedule: the weekly run failed in 11 seconds
+    on 2026-09-19 where it should have taken ~22 minutes.
+    """
+    slept: list[float] = []
+    monkeypatch.setattr("datahoover.connectors._retry.time.sleep", slept.append)
+
+    class ConnectorSpecific(RuntimeError):
+        pass
+
+    calls = []
+
+    def always_custom():
+        calls.append(1)
+        raise ConnectorSpecific("translated 429")
+
+    # Without retry_on it must NOT retry -- one attempt, no sleeps.
+    with pytest.raises(ConnectorSpecific):
+        fetch_with_retry(always_custom, max_attempts=4, schedule=(1.0, 2.0, 3.0))
+    assert len(calls) == 1 and slept == []
+
+    calls.clear()
+    with pytest.raises(ConnectorSpecific):
+        fetch_with_retry(always_custom, max_attempts=4, schedule=(1.0, 2.0, 3.0),
+                         jitter=0.0, retry_on=(ConnectorSpecific,))
+    assert len(calls) == 4, "retry_on must make it retryable"
+    assert slept == [1.0, 2.0, 3.0]
+
+
+def test_gdelt_rate_limit_is_actually_wired_to_the_patient_schedule():
+    """End-to-end guard on the wiring itself, not just the helper.
+
+    The unit tests for the schedule passed while the schedule was dead code,
+    because they exercised fetch_with_retry directly with httpx errors and
+    never the real GDELT call path.
+    """
+    import inspect
+
+    from datahoover.connectors import gdelt_doc_query as g
+
+    src = inspect.getsource(g.fetch_gdelt_docs_patiently)
+    assert src.count("retry_on=(GdeltRateLimited,)") == 2, (
+        "every fetch_with_retry call in the patient path must declare "
+        "GdeltRateLimited retryable, or the schedule silently does nothing"
+    )

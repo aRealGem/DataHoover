@@ -16,6 +16,7 @@ def fetch_with_retry(
     backoff_base: float = 1.0,
     schedule: Optional[Sequence[float]] = None,
     jitter: float = 0.0,
+    retry_on: tuple[type[BaseException], ...] = (),
 ) -> T:
     """
     Retry a fetch function with exponential backoff.
@@ -51,6 +52,14 @@ def fetch_with_retry(
             if status is not None and status < 500 and status != 429:
                 raise
             # Last attempt - don't sleep, just raise
+            if attempt == max_attempts:
+                raise
+            last_exception = exc
+        except retry_on as exc:
+            # Connector-specific retryable errors. A connector that translates
+            # an HTTP status into its own exception type before raising is
+            # INVISIBLE to the two httpx branches below -- which is exactly how
+            # the GDELT 429 path silently bypassed its own retry schedule.
             if attempt == max_attempts:
                 raise
             last_exception = exc
