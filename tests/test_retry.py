@@ -183,3 +183,96 @@ def test_gdelt_rate_limit_is_actually_wired_to_the_patient_schedule():
         "every fetch_with_retry call in the patient path must declare "
         "GdeltRateLimited retryable, or the schedule silently does nothing"
     )
+
+
+# --- behavioural: drive the REAL GDELT path over a mock transport -----------
+#
+# conftest installs an autouse fixture that replaces httpx.Client.get with a
+# raiser, so no test can reach the network by accident. These tests DO need a
+# working .get -- they just need it pointed at a MockTransport instead of the
+# internet. Capturing the real method at import time, before the fixture runs,
+# lets them restore it locally without weakening the guard for anything else.
+_REAL_CLIENT_GET = httpx.Client.get
+
+
+GDELT_429_BODY = (
+    b"Please limit requests to one every 5 seconds or contact "
+    b"kalev.leetaru5@gmail.com for larger queries."
+)
+GDELT_OK_BODY = (
+    b'{"articles":[{"url":"https://example.invalid/a","title":"t",'
+    b'"seendate":"20260919T120000Z","domain":"example.invalid",'
+    b'"language":"English","sourcecountry":"US"}]}'
+)
+
+
+def test_gdelt_429_then_429_then_200_follows_the_patient_schedule(monkeypatch):
+    """The test that would have caught the dead schedule.
+
+    The unit tests drove fetch_with_retry directly with httpx errors and passed
+    while the schedule was unreachable in production. This one goes through the
+    real fetch path over a mock transport, so it fails if the wiring breaks
+    again regardless of how the helper behaves in isolation.
+    """
+    import httpx
+
+    from datahoover.connectors import gdelt_doc_query as g
+
+    seen: list[str] = []
+    slept: list[float] = []
+    monkeypatch.setattr("datahoover.connectors._retry.time.sleep", slept.append)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if len(seen) <= 2:
+            return httpx.Response(429, content=GDELT_429_BODY)
+        return httpx.Response(200, content=GDELT_OK_BODY,
+                              headers={"Content-Type": "application/json"})
+
+    monkeypatch.setattr(httpx.Client, "get", _REAL_CLIENT_GET)
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+
+    def client_with_mock(*a, **kw):
+        kw["transport"] = transport
+        return real_client(*a, **kw)
+
+    monkeypatch.setattr(httpx, "Client", client_with_mock)
+
+    fr = g.fetch_gdelt_docs_patiently("https://api.gdeltproject.org/api/v2/doc/doc?q=x")
+
+    assert len(seen) == 3, f"expected 3 requests (429, 429, 200), got {len(seen)}"
+    assert fr.status_code == 200
+    assert len(fr.data["articles"]) == 1
+    # Two waits, and they must come off the patient schedule -- not the 1s/2s
+    # exponential default, and not zero.
+    assert len(slept) == 2, f"expected 2 sleeps between 3 attempts, got {slept}"
+    base = list(g.GDELT_RETRY_SCHEDULE_S)
+    for got, want in zip(slept, base):
+        assert want <= got <= want + g.GDELT_RETRY_JITTER_S, (
+            f"sleep {got} is not schedule step {want} (+<= jitter)")
+    assert min(slept) >= 60.0, "a seconds-scale backoff means the schedule is bypassed again"
+
+
+def test_gdelt_gives_up_after_max_attempts_all_429(monkeypatch):
+    import httpx
+
+    from datahoover.connectors import gdelt_doc_query as g
+
+    seen: list[str] = []
+    monkeypatch.setattr("datahoover.connectors._retry.time.sleep", lambda s: None)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(429, content=GDELT_429_BODY)
+
+    monkeypatch.setattr(httpx.Client, "get", _REAL_CLIENT_GET)
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+    monkeypatch.setattr(httpx, "Client",
+                        lambda *a, **kw: real_client(*a, **{**kw, "transport": transport}))
+
+    with pytest.raises(g.GdeltRateLimited):
+        g.fetch_gdelt_docs_patiently("https://api.gdeltproject.org/api/v2/doc/doc?q=x")
+    assert len(seen) == g.GDELT_MAX_ATTEMPTS, (
+        f"expected {g.GDELT_MAX_ATTEMPTS} attempts, got {len(seen)}")
