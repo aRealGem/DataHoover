@@ -123,33 +123,36 @@ done
 
 
 # ---------------------------------------------------------------------------
-# GDELT runs AFTER the summary above, on purpose.
+# GDELT step REMOVED 2026-09-19 — source marked DEGRADED.
 #
-# Moving it last among the INGESTS was not enough: compute-signals, alert and
-# the summary table all still came after it, so a GDELT stall took those with
-# it. Its 429 retry schedule waits in minutes (60/300/900 plus jitter, four
-# attempts, ~22 min worst case) and the service is Type=oneshot, so a single
-# TimeoutStartSec covers the whole ExecStart.
+# Was: a deferred `run_ingest "ingest-gdelt" ingest-gdelt --source
+# gdelt_democracy_24h` here, after the summary, so a stall could not take the
+# rest of the report with it.
 #
-# With it here, the report above is already complete and flushed before GDELT
-# is even attempted. If GDELT stalls to the timeout, everything else has
-# already been recorded. Its own result is appended below.
+# Why it is gone: four consecutive 429s from api.gdeltproject.org on the
+# scheduled path — 2026-09-05, 09-12, and both 09-19 attempts. The last was a
+# full patient run: 1338s (~22.3 min), the 60/300/900s + jitter schedule
+# engaged end to end at the documented 1-request-per-5-seconds spacing, and it
+# still came back 429. So the block is not our request cadence.
+#
+# Last ingest that returned data: 2026-08-22, 50 rows. (ingest_runs also shows
+# status=ok on 2026-09-16, but with n_total=0 — a 200 carrying zero articles.
+# That row is not a working feed; don't read it as a later success.)
+#
+# Cause undetermined. A routing test — off-network browser vs. home-network
+# browser — is outstanding and is jackie's to run; until it comes back we
+# cannot tell an upstream change from a network-path block.
+#
+# Deliberately NOT removed: the connector code (src/datahoover/connectors/
+# gdelt_*.py), its tests, and the three [[sources]] blocks in sources.toml —
+# those now carry status = "DEGRADED". Nothing here is a code deletion; this is
+# a scheduling change only, so re-enabling is a one-line revert.
+#
+# To run GDELT by hand anyway:
+#   ./run-ingest.sh ingest-gdelt --source gdelt_democracy_24h
+#
+# Tracked on CW-204. See wiki ops:datahoover, section "GDELT".
 # ---------------------------------------------------------------------------
-echo
-echo "--- ingest-gdelt (deferred: runs after the summary) ---"
-GDELT_RESULT="OK"
-run_ingest "ingest-gdelt" ingest-gdelt --source gdelt_democracy_24h || GDELT_RESULT="FAIL"
-
-echo
-echo "=== Summary addendum: deferred steps ==="
-printf "%-36s %6s %s\n" "STEP" "EXIT" "STATUS"
-printf "%-36s %6s %s\n" "------------------------------------" "------" "------"
-for line in "${RESULTS[@]}"; do
-  IFS='|' read -r step st code <<<"${line}"
-  case "${step}" in
-    ingest-gdelt) printf "%-36s %6s %s\n" "${step}" "${code}" "${st}" ;;
-  esac
-done
 
 echo
 echo "Report also written to: ${REPORT}"

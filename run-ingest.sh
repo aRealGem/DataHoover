@@ -19,7 +19,10 @@ if [[ "${1:-}" == "--all" ]]; then
     "ingest-ckan --source datagov_catalog_climate"
     "ingest-socrata --source socrata_example"
     "ingest-opendatasoft --source opendatasoft_example"
-    "ingest-gdelt --source gdelt_democracy_24h"
+    # GDELT dropped from --all 2026-09-19: source marked DEGRADED (CW-204).
+    # Four straight 429s incl. a patient ~22-min run; last success 2026-08-22.
+    # Still runnable directly: ./run-ingest.sh ingest-gdelt --source gdelt_democracy_24h
+    # "ingest-gdelt --source gdelt_democracy_24h"
     "ingest-ooni --source ooni_us_recent"
     "ingest-ioda --source caida_ioda_recent"
     "ingest-ripe-ris --source ripe_ris_live_10s"
