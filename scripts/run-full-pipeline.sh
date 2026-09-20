@@ -45,9 +45,29 @@ echo "ROOT=${ROOT}"
 echo
 
 declare -a RESULTS=()
+
+# A connector with no key produces a FAIL that looks identical to a broken
+# upstream, which is how the data.gov outage sat mis-triaged. Declare the key
+# each step needs and report a missing one as SKIPPED(no key) -- a different
+# state, with a different owner: it needs a credential, not a bug fix.
+declare -A REQUIRED_KEY=(
+  [ingest-twelvedata]=TWELVEDATA_API_KEY
+  [ingest-fred-macro]=FRED_API_KEY
+  [ingest-fred-crypto]=FRED_API_KEY
+  [ingest-bls]=BLS_API_KEY
+  [ingest-census]=CENSUS_API_KEY
+)
+
 run_ingest() {
   local name="$1"
   shift
+  local key="${REQUIRED_KEY[$name]:-}"
+  if [[ -n "${key}" && -z "${!key:-}" ]]; then
+    RESULTS+=("${name}|SKIPPED(no key)|-")
+    echo "[SKIPPED] ${name} — ${key} is not set (credential missing, not a failure)"
+    echo
+    return 0
+  fi
   set +e
   "${HOOVER[@]}" "$@"
   local code=$?
@@ -114,6 +134,11 @@ fi
 echo
 
 echo "=== Summary ==="
+skipped=$(printf '%s\n' "${RESULTS[@]}" | grep -c 'SKIPPED' || true)
+if [[ "${skipped}" -gt 0 ]]; then
+  echo "NOTE: ${skipped} step(s) SKIPPED for a missing API key. These are not failures;"
+  echo "      they need a credential in the env file. See ops:credentials."
+fi
 printf "%-36s %6s %s\n" "STEP" "EXIT" "STATUS"
 printf "%-36s %6s %s\n" "------------------------------------" "------" "------"
 for line in "${RESULTS[@]}"; do
