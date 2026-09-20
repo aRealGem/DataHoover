@@ -61,8 +61,26 @@ def test_the_crack_coverage_statement_is_present_and_complete() -> None:
         assert share in html, f"crack coverage statement missing {share}"
 
 
-def test_the_chokepoint_slot_is_reserved() -> None:
-    assert "Chokepoint transit gauge" in _html()
+def test_the_chokepoint_gauge_carries_its_licence_conditions_on_the_page() -> None:
+    """R2 D2(b). The attribution, the retrieval date, the material-transformation
+    statement and the as-is disclaimer are the terms this data is used under, so
+    they must reach the rendered page -- not just the JSON behind it."""
+    html = _html()
+    assert "Chokepoint tanker transits" in html
+    assert "Source: International Monetary Fund (PortWatch)" in html
+    assert "MATERIALLY TRANSFORMED" in html
+    assert "as-is" in html.lower()
+
+
+def test_an_ais_degraded_chokepoint_is_labelled_a_lower_bound_on_the_page() -> None:
+    """R2 D2(d). A fall in what the sensors can see must never render as a
+    measured decline -- the NOR->FIN lesson, in the shipping domain."""
+    html = _html()
+    assert "AIS-degraded" in html
+    assert "lower bound" in html
+    assert "LOSS OF OBSERVATION" in html, (
+        "the corroboration verdict must be on the page, not only in the data"
+    )
 
 
 def test_both_colour_modes_are_defined() -> None:
