@@ -82,12 +82,24 @@ def test_residuals_are_attributed_but_never_silently_relocated() -> None:
         assert entry["iso3"] and entry["badge"] and entry["basis"]
         assert entry["confidence"], "the strength of the inference must be stated"
 
+    # R2 D1: both ratified, both required to cite something beyond convention.
     s19 = mod.ATTRIBUTED["S19"]
     assert s19["iso3"] == "TWN"
-    assert "INTERPRETATION" in s19["basis"], "must not read as a code lookup"
+    assert "490" in s19["basis"], "cite the UN M49 area code"
+    assert "unstats.un.org" in s19["basis"], "cite the primary source"
+    assert "CAVEAT KEPT" in s19["basis"], (
+        "'included under 490' is not 'identical to 490' -- the residual may carry "
+        "other unspecified Asian areas, and the basis must keep saying so"
+    )
+
     za1 = mod.ATTRIBUTED["ZA1"]
     assert za1["iso3"] == "ZAF"
-    assert "WEAKER" in za1["basis"], "the aggregate case is weaker and must say so"
+    assert "ZERO refineries" in za1["basis"], (
+        "the strengthening evidence is our own Climate TRACE layer: no refinery in "
+        "BWA, LSO, NAM or SWZ, so a SACU crude cargo had nowhere else to land"
+    )
+    assert "388,500" in za1["basis"], "quote the capacity that is all in ZAF"
+    assert "aggregate" in za1["badge"], "the aggregate badge is kept regardless"
 
 
 def test_attribute_maps_residuals_and_passes_real_codes_through() -> None:
@@ -119,20 +131,49 @@ def test_every_drawn_endpoint_has_a_centroid() -> None:
                     reason="map assets not built")
 def test_attributed_volume_is_drawn_and_flagged_not_dropped() -> None:
     """The whole point: the volume reaches the map AND admits what it is."""
-    seen = 0.0
-    flagged = 0
+    years_with_attribution = 0
     for path in sorted((MAP / "slices").glob("flows-*.json")):
         slice_ = json.loads(path.read_text(encoding="utf-8"))
         assert slice_["unlocatable"] == [], "nothing should be held back any more"
-        for f in slice_["flows"]:
-            if f.get("attributed"):
-                flagged += 1
-                seen += f["mbd"]
-                assert f["attribution_basis"], "an attributed arrow must carry its basis"
-                assert f["attribution_badge"]
-                assert f["attributed_from"]
-    assert flagged, "S19 appears in most slice years"
-    assert seen > 10, f"S19+ZA1 carry ~12 mb/d summed, saw {seen:.2f}"
+        att = [f for f in slice_["flows"] if f.get("attributed")]
+        if att:
+            years_with_attribution += 1
+        for f in att:
+            assert f["attribution_basis"], "an attributed arrow must carry its basis"
+            assert f["attribution_badge"]
+            assert f["attributed_from"]
+    assert years_with_attribution >= 20, (
+        f"S19 appears in most slice years, saw {years_with_attribution}"
+    )
+
+
+def test_attribution_is_reported_per_year_and_never_summed_across_years() -> None:
+    """R2 D1. mb/d is a RATE. Adding 1995's rate to 2024's yields a number with
+    no unit; an earlier build did exactly that and published '12.170 mb/d'."""
+    prov = json.loads((MAP / "provenance.json").read_text(encoding="utf-8"))
+    ne = prov["natural_earth"]
+    assert "attributed_by_year" in ne
+    assert not any(k.endswith("_summed") for k in ne), (
+        f"a summed-rate field survived: {[k for k in ne if k.endswith('_summed')]}"
+    )
+    assert "rate" in ne["attributed_units_note"].lower()
+
+    for year, v in ne["attributed_by_year"].items():
+        if not v["attributed_mb_per_day"]:
+            continue
+        # the share must be of THAT year's world total, and must be sane
+        assert 0 < v["share_of_world_pct"] < 25, f"{year}: {v['share_of_world_pct']}%"
+        recomputed = 100.0 * v["attributed_mb_per_day"] / v["world_total_mb_per_day"]
+        assert abs(recomputed - v["share_of_world_pct"]) < 0.02, f"{year} share mismatch"
+
+
+def test_each_slice_carries_its_own_year_total_not_a_running_one() -> None:
+    totals = {}
+    for path in sorted((MAP / "slices").glob("flows-*.json")):
+        s_ = json.loads(path.read_text(encoding="utf-8"))
+        totals[s_["year"]] = s_["world_total_mb_per_day"]
+    assert len(set(totals.values())) > 20, "world totals should vary year to year"
+    assert max(totals.values()) < 60, "a world crude total above 60 mb/d means rates were summed"
 
 
 def test_the_rendering_contract_is_recorded_for_downstream_views() -> None:

@@ -60,26 +60,33 @@ ATTRIBUTED: dict[str, dict] = {
     "S19": {
         "iso3": "TWN",
         "badge": "residual, attributed",
-        "confidence": "convention",
-        "basis": ("BACI code S19 is 'Other Asia, nes', a UN Comtrade statistical "
-                  "residual rather than a country. In Comtrade practice it is "
-                  "overwhelmingly Taiwan. Corroborated structurally here: TWN "
-                  "appears in BACI in zero years while S19 appears in all 30, so "
-                  "S19 occupies the Taiwan slot and the attribution cannot "
-                  "double-count. This is an INTERPRETATION of what a residual "
-                  "contains, not a code lookup."),
+        "confidence": "documented (UN Statistics)",
+        "basis": ("BACI code S19 is 'Other Asia, nes' (UN M49 area code 490), a UN Comtrade "
+                  "residual rather than a country. UN Statistics states that Taiwan, Province "
+                  "of China is reported under 'Other Asia, not elsewhere specified' (490) -- "
+                  "UN Statistics Wiki, 'Taiwan, Province of China Trade data', "
+                  "unstats.un.org/wiki/display/comtrade. Corroborated structurally here: TWN "
+                  "appears in BACI in zero years while S19 appears in all 30, so S19 occupies "
+                  "the Taiwan slot and the attribution cannot double-count. CAVEAT KEPT: the "
+                  "source says Taiwan is included UNDER 490, which is not the same as 490 "
+                  "being exclusively Taiwan -- a residual may carry other unspecified Asian "
+                  "areas. Treat the mapping as documented and near-certain for crude, not as "
+                  "an identity."),
     },
     "ZA1": {
         "iso3": "ZAF",
         "badge": "aggregate, attributed",
-        "confidence": "weaker -- aggregate, not a rename",
-        "basis": ("BACI code ZA1 is the Southern African Customs Union (...1999), "
-                  "an aggregate over five states, attributed to South Africa as "
-                  "its dominant member and the location of the refining capacity. "
-                  "Structurally ZA1 runs 1995-1999 and ZAF takes over from 2000, "
-                  "a clean succession with no overlap. WEAKER than the S19 case: "
-                  "a customs union is not a renamed country, and a small share of "
-                  "this volume belongs to Botswana, Lesotho, Namibia or Eswatini."),
+        "confidence": "strong for crude (HS 2709); still an aggregate",
+        "basis": ("BACI code ZA1 is the Southern African Customs Union (...1999), an aggregate "
+                  "over five states. Attributed to South Africa, and for CRUDE specifically "
+                  "this is much stronger than 'dominant member': crude imports land at "
+                  "refineries, and the Climate TRACE v6 layer in this same dataset shows "
+                  "ZERO refineries in Botswana, Lesotho, Namibia and Eswatini -- all four SACU "
+                  "refineries, 388,500 bbl/d of capacity, are in South Africa. A SACU crude "
+                  "import therefore had nowhere else to go. Structurally ZA1 runs 1995-1999 and "
+                  "ZAF takes over from 2000, a clean succession with no overlap. The aggregate "
+                  "badge is KEPT: this is an inference about where the barrels went, not a "
+                  "renamed country code."),
     },
 }
 
@@ -152,9 +159,12 @@ def main() -> None:
             })
 
     endpoints: set[str] = set()
-    unlocated_mbd = 0.0
-    attributed_mbd = 0.0
     slice_index = []
+    # R2 D1: mb/d is a RATE. Adding one year's rate to another's produces a
+    # number with no unit and no meaning -- the previous build summed 30 of
+    # them and reported "12.170 mb/d", which was wrong. Attribution is now
+    # reported PER YEAR, with that year's share of world crude trade.
+    attributed_by_year: dict[str, dict] = {}
     for year, rows in sorted(by_year.items()):
         rows.sort(key=lambda x: -x["mbd"])
         top = rows[: args.top]
@@ -176,12 +186,18 @@ def main() -> None:
                 row["attribution_badge"] = marks[0]["badge"]
                 row["attribution_confidence"] = marks[0]["confidence"]
                 row["attribution_basis"] = marks[0]["basis"]
-                attributed_mbd += f["mbd"]
             drawable.append(row)
 
         for f in drawable:
             endpoints.add(f["o"]); endpoints.add(f["d"])
-        unlocated_mbd += sum(f["mbd"] for f in unlocatable)
+        year_total = sum(r["mbd"] for r in rows)          # world crude trade, this year
+        att_mbd = sum(f["mbd"] for f in drawable if f.get("attributed"))
+        attributed_by_year[year] = {
+            "attributed_mb_per_day": round(att_mbd, 4),
+            "world_total_mb_per_day": round(year_total, 4),
+            "share_of_world_pct": round(100.0 * att_mbd / year_total, 2) if year_total else 0.0,
+            "codes": sorted({c for f in drawable for c in f.get("attributed_from", [])}),
+        }
 
         path = OUT / "slices" / f"flows-{year}.json"
         path.write_text(json.dumps({
@@ -192,8 +208,10 @@ def main() -> None:
             "flows": drawable,
             "unlocatable": unlocatable,
             "unlocatable_mb_per_day": round(sum(f["mbd"] for f in unlocatable), 4),
-            "attributed_mb_per_day": round(
-                sum(f["mbd"] for f in drawable if f.get("attributed")), 4),
+            "attributed_mb_per_day": round(att_mbd, 4),
+            "world_total_mb_per_day": round(year_total, 4),
+            "attributed_share_of_world_pct": (
+                round(100.0 * att_mbd / year_total, 2) if year_total else 0.0),
             "unlocatable_note": (
                 "volume in the year's top flows that has no location: "
                 "statistical residuals and customs-union aggregates. Counted, "
@@ -206,10 +224,22 @@ def main() -> None:
                             "kb": round(path.stat().st_size / 1024, 1)})
     print(f"slices: {len(slice_index)} years, top {args.top} each, "
           f"{len(endpoints)} drawable endpoints")
-    print(f"  attributed residual volume (drawn, flagged): {attributed_mbd:.3f} mb/d "
-          f"summed -- " + ", ".join(f"{k}->{v['iso3']}" for k, v in ATTRIBUTED.items()))
-    print(f"  unlocatable volume held back: {unlocated_mbd:.3f} mb/d "
-          f"({sorted(NON_GEOGRAPHIC) or 'none'})")
+    att_years = [y for y, v in attributed_by_year.items() if v["attributed_mb_per_day"]]
+    print(f"  attributed residual flows (drawn, flagged) in {len(att_years)} of "
+          f"{len(slice_index)} years -- "
+          + ", ".join(f"{k}->{v['iso3']}" for k, v in ATTRIBUTED.items()))
+    if att_years:
+        shares = [attributed_by_year[y]["share_of_world_pct"] for y in att_years]
+        lo_y = min(att_years, key=lambda y: attributed_by_year[y]["share_of_world_pct"])
+        hi_y = max(att_years, key=lambda y: attributed_by_year[y]["share_of_world_pct"])
+        print(f"    per-year share of world crude trade: {min(shares):.2f}% ({lo_y}) "
+              f"to {max(shares):.2f}% ({hi_y}); NOT summed -- mb/d is a rate")
+        for y in (att_years[0], att_years[-1]):
+            v = attributed_by_year[y]
+            print(f"      {y}: {v['attributed_mb_per_day']:.3f} of "
+                  f"{v['world_total_mb_per_day']:.3f} mb/d = {v['share_of_world_pct']:.2f}%")
+    print(f"  unlocatable (no attribution possible): "
+          f"{sorted(NON_GEOGRAPHIC) or 'none'}")
     print(f"  largest slice {max(s['kb'] for s in slice_index)} KB "
           f"(bundle for comparison: "
           f"{(SRC/'crude-flows-baci.csv').stat().st_size/1024/1024:.1f} MB)")
@@ -291,14 +321,19 @@ def main() -> None:
             "centroid_overrides": {k: list(v) for k, v in CENTROID_OVERRIDES.items()},
             "non_geographic_codes": NON_GEOGRAPHIC or "none",
             "attributed_codes": ATTRIBUTED,
-            "attributed_mb_per_day_summed": round(attributed_mbd, 4),
+            "attributed_by_year": attributed_by_year,
+            "attributed_units_note": (
+                "mb/d is a RATE, so annual values are never summed across years. "
+                "Each year carries its own attributed mb/d and its share of that "
+                "year's world crude trade. An earlier build reported a 30-year sum "
+                "of 12.170 mb/d; that figure was meaningless and is withdrawn."
+            ),
             "attribution_rendering_contract": (
                 "every attributed flow MUST render distinctly (dashed stroke + "
                 "its attribution_badge) and MUST expose attribution_basis on "
                 "hover. An attributed arrow drawn like a measured one would "
                 "launder an interpretation into a fact."
             ),
-            "unlocated_mb_per_day_summed": round(unlocated_mbd, 4),
         },
         "slices": {"top_n": args.top, "index": slice_index,
                    "selected_by": "guarded volume (mb_per_day_best)"},

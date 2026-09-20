@@ -128,6 +128,8 @@ def main() -> None:
         "years": years,
         "slices": {y: {"flows": slices[y]["flows"],
                        "attributed_mbd": slices[y].get("attributed_mb_per_day", 0),
+                       "attributed_pct": slices[y].get("attributed_share_of_world_pct", 0),
+                       "world_mbd": slices[y].get("world_total_mb_per_day", 0),
                        "of": slices[y]["of_total_pairs"]} for y in years},
         "pts": pts, "names": cen["names"], "nodes": nodes,
         "deltas": deltas, "cracks": cracks,
