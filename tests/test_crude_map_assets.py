@@ -66,14 +66,34 @@ def test_count_vertices_handles_multipolygons() -> None:
 
 
 # ------------------------------------------------ non-geographic volume
-def test_statistical_residuals_are_classified_not_placed() -> None:
-    """S19 and ZA1 are not countries; giving them coordinates invents geography."""
-    assert "S19" in mod.NON_GEOGRAPHIC
-    assert "ZA1" in mod.NON_GEOGRAPHIC
-    assert "S19" not in mod.CENTROID_OVERRIDES
-    assert "ZA1" not in mod.CENTROID_OVERRIDES
-    assert "Taiwan" in mod.NON_GEOGRAPHIC["S19"], "the interpretation must be named"
-    assert "not asserted" in mod.NON_GEOGRAPHIC["S19"]
+def test_residuals_are_attributed_but_never_silently_relocated() -> None:
+    """Ruling: draw them, but make the inference visible (option 3).
+
+    S19 and ZA1 are not countries. They now carry a real location so the
+    volume is on the map, but each keeps a basis string and a confidence, and
+    the rendering contract forces a distinct stroke. Neither may appear as a
+    plain centroid override, which is the form reserved for real places.
+    """
+    assert set(mod.ATTRIBUTED) == {"S19", "ZA1"}
+    assert mod.NON_GEOGRAPHIC == {}, "no residual in this data lacks a successor"
+    for code in ("S19", "ZA1"):
+        assert code not in mod.CENTROID_OVERRIDES
+        entry = mod.ATTRIBUTED[code]
+        assert entry["iso3"] and entry["badge"] and entry["basis"]
+        assert entry["confidence"], "the strength of the inference must be stated"
+
+    s19 = mod.ATTRIBUTED["S19"]
+    assert s19["iso3"] == "TWN"
+    assert "INTERPRETATION" in s19["basis"], "must not read as a code lookup"
+    za1 = mod.ATTRIBUTED["ZA1"]
+    assert za1["iso3"] == "ZAF"
+    assert "WEAKER" in za1["basis"], "the aggregate case is weaker and must say so"
+
+
+def test_attribute_maps_residuals_and_passes_real_codes_through() -> None:
+    assert mod.attribute("S19") == "TWN"
+    assert mod.attribute("ZA1") == "ZAF"
+    assert mod.attribute("SAU") == "SAU"
 
 
 def test_the_only_override_is_a_place_that_ceased_to_exist() -> None:
@@ -97,12 +117,26 @@ def test_every_drawn_endpoint_has_a_centroid() -> None:
 
 @pytest.mark.skipif(not (MAP / "centroids.json").exists(),
                     reason="map assets not built")
-def test_unlocatable_volume_is_carried_not_discarded() -> None:
+def test_attributed_volume_is_drawn_and_flagged_not_dropped() -> None:
+    """The whole point: the volume reaches the map AND admits what it is."""
     seen = 0.0
+    flagged = 0
     for path in sorted((MAP / "slices").glob("flows-*.json")):
         slice_ = json.loads(path.read_text(encoding="utf-8"))
-        seen += slice_["unlocatable_mb_per_day"]
-        for f in slice_["unlocatable"]:
-            assert f["reason"], "every held-back flow must say why"
-            assert f["unlocatable_code"] in mod.NON_GEOGRAPHIC
-    assert seen > 0, "S19 alone carries ~12 mb/d across the slice years"
+        assert slice_["unlocatable"] == [], "nothing should be held back any more"
+        for f in slice_["flows"]:
+            if f.get("attributed"):
+                flagged += 1
+                seen += f["mbd"]
+                assert f["attribution_basis"], "an attributed arrow must carry its basis"
+                assert f["attribution_badge"]
+                assert f["attributed_from"]
+    assert flagged, "S19 appears in most slice years"
+    assert seen > 10, f"S19+ZA1 carry ~12 mb/d summed, saw {seen:.2f}"
+
+
+def test_the_rendering_contract_is_recorded_for_downstream_views() -> None:
+    prov = json.loads((MAP / "provenance.json").read_text(encoding="utf-8"))
+    contract = prov["natural_earth"]["attribution_rendering_contract"]
+    assert "dashed" in contract and "hover" in contract
+    assert "launder" in contract

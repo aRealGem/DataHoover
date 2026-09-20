@@ -47,24 +47,52 @@ CENTROID_OVERRIDES: dict[str, tuple[float, float]] = {
     "ANT": (-68.93, 12.11),
 }
 
-# NOT PLACES. These are statistical residuals and customs-union aggregates, and
-# giving them coordinates would be inventing geography to make a map tidy. They
-# carry real volume, so they are not dropped either: each slice lists them under
-# `unlocatable` with its volume and the reason, for the view to state plainly.
+# NOT PLACES -- but not invisible either. Ruling DH-CRUDE-002-R1 follow-up:
+# attribute them to a real location, draw them DISTINCTLY, and say on the map
+# that an inference was made. Hiding the volume and laundering the inference
+# into a plain arrow are both wrong; this does neither.
 #
-# S19 "Other Asia, nes" is the large one -- 11.97 mb/d summed across 23 slice
-# years. In UN Comtrade practice it is overwhelmingly Taiwan, and mapping it to
-# TWN would put a major importer back on the map. That is a substantive claim
-# about what a residual contains, not a lookup, so it is NOT made here. Ruling
-# welcome; until then the volume is shown as unlocated rather than relocated.
-NON_GEOGRAPHIC: dict[str, str] = {
-    "S19": ("'Other Asia, nes' -- a UN Comtrade residual, not a country. "
-            "Conventionally Taiwan, but that is an interpretation and is not "
-            "asserted here."),
-    "ZA1": ("Southern African Customs Union (...1999) -- a customs-union "
-            "aggregate spanning five states, with no single location."),
+# Neither attribution can double-count, and that is checked rather than
+# assumed: TWN appears in BACI in ZERO years while S19 appears in all 30, and
+# ZA1 runs 1995-1999 while ZAF runs 2000-2024. Each pair is mutually exclusive,
+# so the residual occupies exactly the slot its successor later fills.
+ATTRIBUTED: dict[str, dict] = {
+    "S19": {
+        "iso3": "TWN",
+        "badge": "residual, attributed",
+        "confidence": "convention",
+        "basis": ("BACI code S19 is 'Other Asia, nes', a UN Comtrade statistical "
+                  "residual rather than a country. In Comtrade practice it is "
+                  "overwhelmingly Taiwan. Corroborated structurally here: TWN "
+                  "appears in BACI in zero years while S19 appears in all 30, so "
+                  "S19 occupies the Taiwan slot and the attribution cannot "
+                  "double-count. This is an INTERPRETATION of what a residual "
+                  "contains, not a code lookup."),
+    },
+    "ZA1": {
+        "iso3": "ZAF",
+        "badge": "aggregate, attributed",
+        "confidence": "weaker -- aggregate, not a rename",
+        "basis": ("BACI code ZA1 is the Southern African Customs Union (...1999), "
+                  "an aggregate over five states, attributed to South Africa as "
+                  "its dominant member and the location of the refining capacity. "
+                  "Structurally ZA1 runs 1995-1999 and ZAF takes over from 2000, "
+                  "a clean succession with no overlap. WEAKER than the S19 case: "
+                  "a customs union is not a renamed country, and a small share of "
+                  "this volume belongs to Botswana, Lesotho, Namibia or Eswatini."),
+    },
 }
 
+# Codes with no defensible attribution at all would go here and be carried as
+# unlocatable volume. Currently empty: both residuals in the data have a
+# structurally corroborated successor.
+NON_GEOGRAPHIC: dict[str, str] = {}
+
+
+def attribute(code: str) -> str:
+    """Map a residual code to the location it stands for, or return it as-is."""
+    entry = ATTRIBUTED.get(code)
+    return entry["iso3"] if entry else code
 
 def resolve_iso3(props: dict) -> str | None:
     """ISO_A3_EH, then ADM0_A3. Never plain ISO_A3 -- it is -99 for FRA/NOR."""
@@ -125,20 +153,32 @@ def main() -> None:
 
     endpoints: set[str] = set()
     unlocated_mbd = 0.0
+    attributed_mbd = 0.0
     slice_index = []
     for year, rows in sorted(by_year.items()):
         rows.sort(key=lambda x: -x["mbd"])
         top = rows[: args.top]
 
-        # Split drawable arrows from volume that has no location. Both are
-        # published; only the drawable half becomes an arrow.
-        drawable = [f for f in top
-                    if f["o"] not in NON_GEOGRAPHIC and f["d"] not in NON_GEOGRAPHIC]
-        unlocatable = [
-            {**f, "unlocatable_code": f["o"] if f["o"] in NON_GEOGRAPHIC else f["d"],
-             "reason": NON_GEOGRAPHIC.get(f["o"]) or NON_GEOGRAPHIC.get(f["d"])}
-            for f in top if f not in drawable
-        ]
+        # Attributed residuals are drawn, but carry the inference with them
+        # so the view can render them distinctly and name the basis on hover.
+        drawable, unlocatable = [], []
+        for f in top:
+            bad = [c for c in (f["o"], f["d"]) if c in NON_GEOGRAPHIC]
+            if bad:
+                unlocatable.append({**f, "unlocatable_code": bad[0],
+                                    "reason": NON_GEOGRAPHIC[bad[0]]})
+                continue
+            marks = [ATTRIBUTED[c] for c in (f["o"], f["d"]) if c in ATTRIBUTED]
+            row = {**f, "o": attribute(f["o"]), "d": attribute(f["d"])}
+            if marks:
+                row["attributed"] = True
+                row["attributed_from"] = [c for c in (f["o"], f["d"]) if c in ATTRIBUTED]
+                row["attribution_badge"] = marks[0]["badge"]
+                row["attribution_confidence"] = marks[0]["confidence"]
+                row["attribution_basis"] = marks[0]["basis"]
+                attributed_mbd += f["mbd"]
+            drawable.append(row)
+
         for f in drawable:
             endpoints.add(f["o"]); endpoints.add(f["d"])
         unlocated_mbd += sum(f["mbd"] for f in unlocatable)
@@ -152,6 +192,8 @@ def main() -> None:
             "flows": drawable,
             "unlocatable": unlocatable,
             "unlocatable_mb_per_day": round(sum(f["mbd"] for f in unlocatable), 4),
+            "attributed_mb_per_day": round(
+                sum(f["mbd"] for f in drawable if f.get("attributed")), 4),
             "unlocatable_note": (
                 "volume in the year's top flows that has no location: "
                 "statistical residuals and customs-union aggregates. Counted, "
@@ -164,8 +206,10 @@ def main() -> None:
                             "kb": round(path.stat().st_size / 1024, 1)})
     print(f"slices: {len(slice_index)} years, top {args.top} each, "
           f"{len(endpoints)} drawable endpoints")
-    print(f"  unlocatable volume held back from the arrow layer: "
-          f"{unlocated_mbd:.3f} mb/d summed, codes {sorted(NON_GEOGRAPHIC)}")
+    print(f"  attributed residual volume (drawn, flagged): {attributed_mbd:.3f} mb/d "
+          f"summed -- " + ", ".join(f"{k}->{v['iso3']}" for k, v in ATTRIBUTED.items()))
+    print(f"  unlocatable volume held back: {unlocated_mbd:.3f} mb/d "
+          f"({sorted(NON_GEOGRAPHIC) or 'none'})")
     print(f"  largest slice {max(s['kb'] for s in slice_index)} KB "
           f"(bundle for comparison: "
           f"{(SRC/'crude-flows-baci.csv').stat().st_size/1024/1024:.1f} MB)")
@@ -245,7 +289,15 @@ def main() -> None:
                 "this is precision reduction, not Douglas-Peucker."
             ),
             "centroid_overrides": {k: list(v) for k, v in CENTROID_OVERRIDES.items()},
-            "non_geographic_codes": NON_GEOGRAPHIC,
+            "non_geographic_codes": NON_GEOGRAPHIC or "none",
+            "attributed_codes": ATTRIBUTED,
+            "attributed_mb_per_day_summed": round(attributed_mbd, 4),
+            "attribution_rendering_contract": (
+                "every attributed flow MUST render distinctly (dashed stroke + "
+                "its attribution_badge) and MUST expose attribution_basis on "
+                "hover. An attributed arrow drawn like a measured one would "
+                "launder an interpretation into a fact."
+            ),
             "unlocated_mb_per_day_summed": round(unlocated_mbd, 4),
         },
         "slices": {"top_n": args.top, "index": slice_index,
