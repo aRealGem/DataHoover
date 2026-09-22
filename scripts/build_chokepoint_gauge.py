@@ -22,11 +22,18 @@ POLITENESS. One query per chokepoint per run, plus one for the lookup, with a
 pause between. Intended cadence is weekly at most; --no-fetch replays the cache
 and makes no request at all.
 
-AIS DEGRADATION IS A FIRST-CLASS STATE, not a footnote. Where PortWatch warns
-of GPS jamming, AIS spoofing or dark vessels, a fall in observed transits is a
-fall in what the sensors can SEE. Such a chokepoint reports a lower bound and
-must never render as a measured decline -- the same mistake as treating a
-silent Eurostat reporter as zero flow.
+AIS DEGRADATION IS A FIRST-CLASS STATE, not a footnote -- but it bounds the
+MAGNITUDE, not the DIRECTION. Where PortWatch warns of GPS jamming, AIS
+spoofing or dark vessels, the observed transit count under-reports, so the
+count is a LOWER BOUND and the exact percentage is unreliable. That is not a
+licence to doubt the fall itself: EIA's independent volume series shows Gulf
+liquids through Hormuz falling from 20.7 mb/d (Q4 2025) to 4.9 mb/d (Q2 2026).
+The fall is real and large. Report the direction; do not quote the percentage.
+
+COUNTS ARE NOT VOLUMES. This gauge counts vessel transits. EIA counts barrels.
+They can move in opposite directions -- Bab el-Mandeb's tanker count is down
+while its EIA volume is up -- so a transit count must never be reported as a
+change in oil.
 """
 from __future__ import annotations
 
@@ -78,15 +85,93 @@ AIS_DEGRADED: dict[str, str] = {
     "Strait of Hormuz": (
         "Sustained GNSS/GPS interference reported in the Gulf and Strait of "
         "Hormuz; AIS positions are jammed or spoofed and some tankers transit "
-        "dark. Observed transits are a LOWER BOUND."
+        "dark. The observed count is a LOWER BOUND, so the exact percentage is "
+        "unreliable -- but the direction is corroborated independently by EIA "
+        "volumes, which fell from 20.7 to 4.9 mb/d between Q4 2025 and Q2 2026."
     ),
     "Bab el-Mandeb Strait": (
         "Red Sea / Bab el-Mandeb: widespread AIS switch-off and spoofing amid "
-        "attacks on shipping, plus rerouting around the Cape. A fall here "
-        "mixes genuine diversion with vessels that simply stopped broadcasting. "
-        "Observed transits are a LOWER BOUND."
+        "attacks on shipping, plus rerouting around the Cape. The observed "
+        "count is a LOWER BOUND. Here count and barrels point OPPOSITE ways -- "
+        "the transit count is down while EIA volumes rose from 5.4 to 8.1 mb/d "
+        "(Q4 2025 -> Q2 2026) on rerouted Saudi crude."
     ),
 }
+
+
+# EIA's volume series, carried because it answers the question a transit COUNT
+# cannot: barrels, not vessels. It is the independent check on direction.
+# NOTE ON 20.7: ruling R3 quoted 21.6 mb/d for Q4 2025. That figure could not be
+# corroborated at EIA; EIA's published Q4 2025 figure is 20.7 mb/d, which is
+# used here. The Q2 2026 figure of 4.9 mb/d is confirmed.
+EIA_VOLUMES: dict = {
+    "source": ("U.S. Energy Information Administration, World Oil Transit "
+               "Chokepoints"),
+    "url": ("https://www.eia.gov/international/content/analysis/special_topics/"
+            "World_Oil_Transit_Chokepoints"),
+    "retrieved_at": "2026-09-21",
+    "metric": "crude oil and petroleum liquids, million barrels per day (mb/d)",
+    "series": {
+        "Strait of Hormuz": {
+            "2025Q4": 20.7, "2026Q1": 14.6, "2026Q2": 4.9,
+            "note": ("EIA reports Hormuz liquids at 20.7 mb/d in Q4 2025, 14.6 "
+                     "mb/d in Q1 2026 and 4.9 mb/d in Q2 2026 -- a fall of "
+                     "roughly three quarters, in barrels, independent of AIS."),
+        },
+        "Bab el-Mandeb Strait": {
+            "2025Q4": 5.4, "2026Q2": 8.1,
+            "note": ("EIA reports Bab el-Mandeb liquids RISING from 5.4 mb/d "
+                     "(Q4 2025) to 8.1 mb/d (Q2 2026) as Saudi crude was "
+                     "rerouted through the East-West pipeline to Yanbu. The "
+                     "tanker count here is down over the same broad period."),
+        },
+    },
+    "period_caveat": (
+        "EIA publishes QUARTERLY volumes; this gauge is a 30-day trailing mean "
+        "of daily transit counts. The two do not cover the same period and must "
+        "never be differenced against each other."
+    ),
+}
+
+COUNTS_ARE_NOT_VOLUMES = (
+    "TANKER COUNTS ARE NOT VOLUMES. This gauge counts vessel transits, not "
+    "barrels; vessel size, part-loading and ballast legs all break the link. "
+    "The worked example is Bab el-Mandeb, where the two point OPPOSITE ways: "
+    "its tanker count is down against the pre-conflict mean while EIA's liquids "
+    "volume through the same strait ROSE from 5.4 mb/d (Q4 2025) to 8.1 mb/d "
+    "(Q2 2026). A falling count there sits alongside rising barrels."
+)
+
+# What this panel structurally cannot see. Stated plainly so a reader does not
+# mistake five sea chokepoints for the whole picture.
+NOT_SHOWN: list[dict] = [
+    {"what": "Pipeline bypass",
+     "why": ("Crude leaving the Gulf by pipeline crosses no strait and can "
+             "appear in no transit count. The East-West (Petroline) line to "
+             "Yanbu carried rerouted Saudi barrels until it was shut on "
+             "2026-09-11; the Habshan-Fujairah line bypasses Hormuz for UAE "
+             "crude. Neither is measured here.")},
+    {"what": "Gulf->Asia monthly flows",
+     "why": ("Monthly origin->destination volumes from Gulf producers to Asian "
+             "refiners are not in this gauge. The annual BACI flow layer ends "
+             "in 2024 and cannot show the 2026 conflict.")},
+    {"what": "Destination change",
+     "why": ("A cargo sold to a different buyer sails a different route and "
+             "changes several chokepoint counts at once. The panel cannot "
+             "separate that from a change in total barrels.")},
+    {"what": "Shut-in production",
+     "why": ("Oil that is never lifted crosses nothing. It leaves the panel "
+             "silently and is indistinguishable here from rerouting.")},
+]
+
+
+def eia_series(name: str) -> tuple[float, float, str, str] | None:
+    """(first value, last value, first quarter, last quarter), or None."""
+    s = EIA_VOLUMES["series"].get(name)
+    if not s:
+        return None
+    qs = sorted(k for k in s if k != "note")
+    return s[qs[0]], s[qs[-1]], qs[0], qs[-1]
 
 
 def _get(url: str, params: dict, *, timeout: int = 120) -> dict:
@@ -177,6 +262,58 @@ def gauge(name: str, rows: list[dict]) -> dict:
     def ratio(a, b):
         return round(100.0 * (a / b - 1.0), 1) if (a is not None and b) else None
 
+    # Does an independent barrel count move the same way as the vessel count?
+    # This is what separates "the fall is real" from "we stopped seeing it".
+    count_pct = ratio(cur, pre)
+    ev = eia_series(name)
+    eia_block = None
+    if ev:
+        v0, v1, q0, q1 = ev
+        vol_dir = "down" if v1 < v0 else "up"
+        cnt_dir = "down" if (count_pct or 0) < 0 else "up"
+        agrees = vol_dir == cnt_dir
+        eia_block = {
+            "source": EIA_VOLUMES["source"],
+            "url": EIA_VOLUMES["url"],
+            "retrieved_at": EIA_VOLUMES["retrieved_at"],
+            "metric": EIA_VOLUMES["metric"],
+            "quarters": {k: v for k, v in
+                         EIA_VOLUMES["series"][name].items() if k != "note"},
+            "direction": vol_dir,
+            "agrees_with_transit_count": agrees,
+            "note": EIA_VOLUMES["series"][name]["note"],
+            "period_caveat": EIA_VOLUMES["period_caveat"],
+        }
+        if agrees:
+            reading = (
+                f"The DIRECTION is corroborated. EIA's independent volume series "
+                f"for this chokepoint moved the same way, {v0} -> {v1} mb/d "
+                f"({q0} -> {q1}); the fall is real and large. The MAGNITUDE "
+                f"shown here is a LOWER BOUND: AIS jamming and dark transits "
+                f"mean the count under-reports, so this percentage is "
+                f"unreliable. Quote the direction, not the figure."
+            )
+        else:
+            reading = (
+                f"COUNT AND BARRELS DISAGREE. The tanker count is {cnt_dir} "
+                f"{abs(count_pct or 0):.1f}% against the pre-conflict mean while "
+                f"EIA's volume series went {vol_dir}, {v0} -> {v1} mb/d "
+                f"({q0} -> {q1}). Counts are not volumes: do not read this "
+                f"count as a change in oil."
+            )
+    elif degraded:
+        reading = (
+            "The observed count is a LOWER BOUND under an AIS-degradation "
+            "warning, so the magnitude is unreliable. No independent volume "
+            "series is carried for this chokepoint, so the direction is "
+            "uncorroborated here."
+        )
+    else:
+        reading = (
+            "Observed transits; no AIS-degradation warning applies to this "
+            "chokepoint. Still a count of vessels, not a volume of oil."
+        )
+
     return {
         "chokepoint": name,
         "window_days": WINDOW_DAYS,
@@ -191,32 +328,34 @@ def gauge(name: str, rows: list[dict]) -> dict:
             "through": (WAR_START - timedelta(days=1)).isoformat(),
             "days": len(pre_war),
             "tanker_transits_per_day": round(pre, 2) if pre is not None else None,
-            "change_pct": ratio(cur, pre),
+            "change_pct": count_pct,
         },
         "ais_degraded": degraded,
         "ais_note": AIS_DEGRADED.get(name),
         "render_as": (
-            "AIS-degraded: transits are a lower bound" if degraded
+            "AIS-degraded: the count is a lower bound" if degraded
             else "observed transits"
         ),
-        "reading": (
-            "A fall here is NOT a measured decline. It mixes real diversion "
-            "with vessels that stopped broadcasting, so treat every figure as "
-            "a floor." if degraded else
-            "Observed transits; no AIS-degradation warning applies to this "
-            "chokepoint."
-        ),
+        "reading": reading,
+        "eia_volumes": eia_block,
+        "counts_are_not_volumes": COUNTS_ARE_NOT_VOLUMES,
         "usable": True,
     }
 
 
 def corroborate(gauges: list[dict]) -> dict:
-    """Does a big fall look like rerouting, or like losing sight of the ships?
+    """Did an alternative SEA route absorb the traffic that left a chokepoint?
 
-    Rerouted oil has to appear somewhere. If one chokepoint collapses while the
-    alternatives do NOT rise to absorb it, the barrels did not move -- the
-    sensors did. This is the NOR->FIN test in a new domain: a number that fell
-    to nothing usually means nobody is reporting, not that nothing happened.
+    The mechanism is still informative, and it is all this panel can test: if
+    one chokepoint collapses and no other strait rises to take up the slack,
+    the traffic did not simply shift between straits.
+
+    What does NOT follow -- and this is the correction to the earlier reading --
+    is that the traffic must therefore still be out there, merely unobserved.
+    Oil that is shut in, or moved by pipeline, or sold to a nearer buyer does
+    not reappear at any sea chokepoint. "It has to show up somewhere" is false.
+    A no-absorber result NARROWS the explanations; it does not pick one, and it
+    is not evidence that traffic continued.
     """
     usable = [g for g in gauges if g.get("usable")]
     now = sum(g["tanker_transits_per_day"] or 0 for g in usable)
@@ -226,30 +365,67 @@ def corroborate(gauges: list[dict]) -> dict:
     risers = [g for g in usable
               if (g["vs_pre_conflict_mean"]["change_pct"] or 0) >= 10]
     lost = pre - now
+    # How much of the shortfall did the risers actually take up? Naming a riser
+    # without this number invites the reader to assume it covered the gap.
+    absorbed = sum((g["tanker_transits_per_day"] or 0)
+                   - (g["vs_pre_conflict_mean"]["tanker_transits_per_day"] or 0)
+                   for g in risers)
+
+    if collapsed:
+        names = ", ".join(g["chokepoint"] for g in collapsed)
+        if risers:
+            absorb_clause = (
+                "{rn} rose, but only by about {ab:.0f} transits/day against a "
+                "shortfall of about {lost:.0f} -- nowhere near enough to "
+                "account for it. No sea-chokepoint absorber was found."
+            ).format(rn=", ".join(g["chokepoint"] for g in risers),
+                     ab=absorbed, lost=lost)
+        else:
+            absorb_clause = (
+                "No other chokepoint in the panel rose at all: no "
+                "sea-chokepoint absorber was found."
+            )
+        verdict = (
+            "A collapse at {names} left about {lost:.0f} tanker transits/day "
+            "out of the observed panel total. {absorb} That is consistent with "
+            "shut-in production, pipeline bypass, or a change of destination "
+            "-- it is NOT evidence that the traffic continued unobserved. "
+            "Shut-in or pipelined oil does not reappear at another sea "
+            "chokepoint, so the absence of an absorber cannot be read as "
+            "proof of hidden traffic. Separately, the underlying fall in Gulf "
+            "oil IS real and large: EIA reports Hormuz liquids at "
+            "{h0} mb/d ({q0}) against {h1} mb/d ({q1}). AIS degradation makes "
+            "the transit COUNT a lower bound, so the exact percentage here is "
+            "unreliable -- the direction is not."
+        ).format(names=names, lost=lost, absorb=absorb_clause,
+                 h0=EIA_VOLUMES["series"]["Strait of Hormuz"]["2025Q4"],
+                 q0="Q4 2025",
+                 h1=EIA_VOLUMES["series"]["Strait of Hormuz"]["2026Q2"],
+                 q1="Q2 2026")
+    else:
+        verdict = (
+            "No chokepoint in the panel has collapsed against its pre-conflict "
+            "mean; the observed totals are internally consistent."
+        )
+
     return {
         "panel_tanker_transits_per_day_now": round(now, 2),
         "panel_tanker_transits_per_day_pre_conflict": round(pre, 2),
         "net_change_per_day": round(now - pre, 2),
         "collapsed_chokepoints": [g["chokepoint"] for g in collapsed],
         "chokepoints_absorbing": [g["chokepoint"] for g in risers],
-        "verdict": (
-            "A collapse at {names} is NOT matched by compensating rises "
-            "elsewhere in the panel: about {lost:.0f} tanker transits/day left "
-            "the observed total and did not reappear at any alternative route. "
-            "Oil that genuinely reroutes has to show up somewhere. Combined "
-            "with the AIS-degradation warning, the far more likely reading is "
-            "LOSS OF OBSERVATION, not loss of traffic. Do not report this as a "
-            "measured decline in shipping."
-        ).format(names=", ".join(g["chokepoint"] for g in collapsed), lost=lost)
-        if collapsed else (
-            "No chokepoint in the panel has collapsed against its pre-conflict "
-            "mean; the observed totals are internally consistent."
-        ),
+        "transits_per_day_absorbed_by_risers": round(absorbed, 2),
+        "verdict": verdict,
         "method": (
             "compares the panel's summed tanker transits per day now against "
-            "the pre-conflict mean, and checks whether any alternative route "
-            "rose enough to absorb a collapse"
+            "the pre-conflict mean, and checks whether any alternative SEA "
+            "route rose enough to absorb a collapse. A negative result rules "
+            "out strait-to-strait rerouting within the panel; it does not "
+            "distinguish shut-in, pipeline bypass or destination change, and "
+            "it is not evidence that traffic continued"
         ),
+        "not_shown": NOT_SHOWN,
+        "counts_are_not_volumes": COUNTS_ARE_NOT_VOLUMES,
     }
 
 
@@ -300,10 +476,16 @@ def main() -> None:
         ),
         "ais_degradation_policy": (
             "A chokepoint under a GNSS-jamming / AIS-spoofing / dark-vessel "
-            "warning reports a LOWER BOUND. Its fall must never be rendered as "
-            "a measured decline. The list is DECLARED, not detected, and is "
-            "reviewed at each refresh."
+            "warning reports a LOWER BOUND on the COUNT. That bounds the "
+            "MAGNITUDE, not the DIRECTION: the percentage must not be quoted as "
+            "precise, but the fall itself is corroborated by EIA's independent "
+            "volume series and must not be dismissed as a sensor artefact. "
+            "The list is DECLARED, not detected, and is reviewed at each "
+            "refresh."
         ),
+        "eia_volumes": EIA_VOLUMES,
+        "counts_are_not_volumes": COUNTS_ARE_NOT_VOLUMES,
+        "not_shown": NOT_SHOWN,
         "raw_data_policy": (
             "Raw IMF rows are cached under data/raw/portwatch/ (gitignored) and "
             "are NOT republished. Only these derived ratios leave the build."
@@ -319,7 +501,7 @@ def main() -> None:
     if c["collapsed_chokepoints"]:
         print(f"  COLLAPSED: {c['collapsed_chokepoints']}  "
               f"ABSORBING: {c['chokepoints_absorbing'] or 'none'}")
-        print(f"  -> {c['verdict'][:150]}...")
+        print(f"  -> {c['verdict'][:220]}...")
     print(f"\n{ATTRIBUTION}")
     print(f"wrote {path}  ({path.stat().st_size/1024:.1f} KB)")
 
