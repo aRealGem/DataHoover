@@ -27,7 +27,12 @@ built = pytest.mark.skipif(not GAUGE.exists(), reason="gauge not built (data/ is
 @built
 def test_attribution_transformation_and_disclaimer_all_travel_with_the_data() -> None:
     b = json.loads(GAUGE.read_text(encoding="utf-8"))
-    assert b["attribution"] == "Source: International Monetary Fund (PortWatch)"
+    # R4: the IMF terms require the form
+    # "Source: International Monetary Fund, <Database Name>, <link>"
+    assert b["attribution"] == (
+        "Source: International Monetary Fund, PortWatch Daily Chokepoints Data, "
+        "https://portwatch.imf.org"
+    )
     assert b["retrieved_at"]
     assert "MATERIALLY TRANSFORMED" in b["transformation"]
     assert "as-is" in b["disclaimer"].lower()
@@ -37,6 +42,40 @@ def test_attribution_transformation_and_disclaimer_all_travel_with_the_data() ->
 
 
 @built
+@built
+def test_the_imf_terms_travel_with_the_data_with_their_provenance() -> None:
+    """R4. The terms were read by the reviewer from an un-403'd network, not
+    verified from this host, and the bundle has to say which."""
+    b = json.loads(GAUGE.read_text(encoding="utf-8"))
+    t = b["terms"]
+    assert t["url"] == "https://www.imf.org/en/about/copyright-and-terms"
+    assert t["effective"] == "2024-10-11"
+    assert "reviewer read" in t["provenance"], "do not claim ccagent verified it"
+    assert "403" in t["provenance"], "say why it could not be verified here"
+    assert "no raw IMF rows redistributed" in t["redistribution"]
+
+
+def test_the_fetch_discipline_is_described_as_the_code_behaves() -> None:
+    """R4 step 2. Three of the four properties the ruling asked me to confirm
+    are false today; the docstring states that rather than the aspiration."""
+    doc = mod.__doc__
+    assert "FETCH DISCIPLINE" in doc
+    assert "where=1=1" in doc, "the lookup enumerates; say so"
+    assert "PAGINATION LOOP" in doc, "daily is not one request by construction"
+    assert "NO rate-limit handling" in doc
+    # and the code must still match those claims. Compare against the CODE only
+    # -- the docstring names Retry-After in order to say it is absent, so
+    # scanning the whole file would match its own disclaimer.
+    src = (ROOT / "scripts" / "build_chokepoint_gauge.py").read_text(encoding="utf-8")
+    code = src.split('"""', 2)[2]
+    assert "resultOffset" in code and "offset += 1000" in code, "pagination loop"
+    for retry_idiom in ("Retry-After", "retry", "backoff", "HTTPError"):
+        assert retry_idiom not in code, (
+            f"{retry_idiom!r} appeared in the code: rate-limit handling was added, "
+            "so the docstring must stop saying there is none"
+        )
+
+
 def test_no_raw_imf_rows_are_republished() -> None:
     """Condition (a): derived ratios only. A daily series would be raw data."""
     b = json.loads(GAUGE.read_text(encoding="utf-8"))

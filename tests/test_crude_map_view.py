@@ -73,7 +73,10 @@ def test_the_chokepoint_gauge_carries_its_licence_conditions_on_the_page() -> No
     they must reach the rendered page -- not just the JSON behind it."""
     html = _html()
     assert "Chokepoint tanker transits" in html
-    assert "Source: International Monetary Fund (PortWatch)" in html
+    assert "Source: International Monetary Fund, PortWatch Daily Chokepoints Data" in html
+    assert "https://www.imf.org/en/about/copyright-and-terms" in html, "terms URL"
+    assert "2024-10-11" in html, "terms effective date"
+    assert "no raw IMF rows redistributed" in html
     assert "MATERIALLY TRANSFORMED" in html
     assert "as-is" in html.lower()
 
@@ -212,6 +215,16 @@ def test_the_narrow_viewport_rules_that_stop_the_390px_overflow_survive() -> Non
     assert "@media (max-width:560px)" in html, "the narrow-width block is gone"
     block = html.split("@media (max-width:560px)", 1)[1][:400]
     assert "table-layout:fixed" in block, "this is the rule that fixes the 7px"
+
+
+def test_the_page_admits_the_delta_pair_was_never_validated() -> None:
+    """R4 D2. The pair was chosen by eye. A reader comparing colours deserves
+    to know no validator or CVD simulation stood behind them."""
+    html = _html()
+    assert "Delta overlay colours are not validated" in html
+    assert "checked by eye" in html
+    assert "colour-vision-deficiency simulation was run on this host" in html.replace(
+        "colour-vision-\n", "colour-vision-").replace("colour-vision-'\n    + 'deficiency", "colour-vision-deficiency")
 
 
 def test_both_colour_modes_are_defined() -> None:

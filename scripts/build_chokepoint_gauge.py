@@ -3,7 +3,8 @@
 
 DH-CRUDE-002 Step 3, ruling R2 D2.
 
-    Source: International Monetary Fund (PortWatch)
+    Source: International Monetary Fund, PortWatch Daily Chokepoints Data,
+    https://portwatch.imf.org
 
 Figures here are MATERIALLY TRANSFORMED from the IMF's published daily transit
 counts: they are ratios of a trailing mean against (i) the same calendar window
@@ -11,16 +12,46 @@ in 2024 and (ii) the mean of every day before the 2026-02-27 conflict start.
 The IMF provides its data as-is and makes no warranty. That statement, the
 attribution and the retrieval date travel with the output and must be rendered.
 
-Licence position (reviewer-read, ruling R2 D2): IMF terms permit copying,
-publishing and derivative works including commercially, PROVIDED the source is
-attributed and any material transformation is stated alongside the citation.
+LICENCE POSITION (per reviewer read 2026-09-21, ruling R4; NOT ccagent-verified
+-- imf.org returns HTTP 403 to this host and the terms section is JS-loaded, so
+the wording came from a search cache of the page, consistent with the page's own
+effective date). IMF Copyright and Usage,
+https://www.imf.org/en/about/copyright-and-terms, effective 2024-10-11:
+data may be distributed or reproduced provided it appears accurately and is
+attributed as "Source: International Monetary Fund, <Database Name>, <link>";
+material transformation must be stated explicitly alongside the citation;
+automated BULK download without permission is prohibited; and a redistributor
+must make reasonable efforts to have downstream users comply.
+
+No raw IMF rows are redistributed -- the derived gauge only.
 
 WHAT IS NOT COMMITTED. Raw IMF rows stay under data/raw/portwatch/, which is
 gitignored. Only code, tests and the derived gauge leave this script.
 
-POLITENESS. One query per chokepoint per run, plus one for the lookup, with a
-pause between. Intended cadence is weekly at most; --no-fetch replays the cache
-and makes no request at all.
+FETCH DISCIPLINE, AS THE CODE ACTUALLY BEHAVES (audited 2026-09-21 under ruling
+R4 -- stated, deliberately not "fixed", because three of the four properties the
+ruling asked me to confirm are NOT true today):
+
+  * Cadence is weekly at most. --no-fetch replays the cache and makes NO request.
+  * The chokepoint lookup is fetched ONCE EVER and cached; later runs read the
+    cache. But that one call is `where=1=1`, which IS an enumeration of the
+    lookup FeatureServer: it returned all 28 chokepoints when we need 5.
+  * Each chokepoint's daily series is fetched with a PAGINATION LOOP
+    (resultOffset += 1000), not a single request. It happens to be one request
+    per chokepoint right now only because each series holds 987 rows against a
+    1000-row page. Headroom is 13 days: once the series passes 1000 rows -- on
+    current daily growth, around 2026-09-26 -- every weekly run silently becomes
+    two requests per chokepoint.
+  * There is NO rate-limit handling: `_get` makes a bare urlopen with no retry,
+    no backoff, and no reading of Retry-After or 429. A throttle surfaces as an
+    unhandled HTTPError.
+  * load_daily ignores its cache unless --no-fetch, so a normal weekly run
+    always refetches all five series: 5 requests/week today, 10 after the page
+    boundary is crossed.
+
+  Against the IMF's "no automated BULK download" condition, five derived-series
+  queries a week is not bulk; the enumeration and the unbounded pagination loop
+  are the two things worth a reviewer's eye before this ever runs unattended.
 
 AIS DEGRADATION IS A FIRST-CLASS STATE, not a footnote -- but it bounds the
 MAGNITUDE, not the DIRECTION. Where PortWatch warns of GPS jamming, AIS
@@ -55,7 +86,13 @@ LOOKUP = f"{BASE}/PortWatch_chokepoints_database/FeatureServer/0/query"
 DAILY = f"{BASE}/Daily_Chokepoints_Data/FeatureServer/0/query"
 UA = "DataHoover/crude-map (+https://github.com/aRealGem/DataHoover)"
 
-ATTRIBUTION = "Source: International Monetary Fund (PortWatch)"
+ATTRIBUTION = ("Source: International Monetary Fund, PortWatch Daily "
+               "Chokepoints Data, https://portwatch.imf.org")
+TERMS_URL = "https://www.imf.org/en/about/copyright-and-terms"
+TERMS_EFFECTIVE = "2024-10-11"
+TERMS_READ = ("per reviewer read 2026-09-21; not verified from this host, which "
+              "the IMF returns 403 to")
+REDISTRIBUTION = "no raw IMF rows redistributed; derived gauge only"
 AS_IS = ("Provided by the IMF as-is and without warranty. The IMF is not "
          "responsible for any use made of these figures.")
 TRANSFORMATION = (
@@ -101,12 +138,9 @@ AIS_DEGRADED: dict[str, str] = {
 
 # EIA's volume series, carried because it answers the question a transit COUNT
 # cannot: barrels, not vessels. It is the independent check on direction.
-# NOTE ON 20.7: ruling R3 quoted 21.6 mb/d for Q4 2025. That figure could not be
-# corroborated at EIA; EIA's published Q4 2025 figure is 20.7 mb/d, which is
-# used here. The Q2 2026 figure of 4.9 mb/d is confirmed.
 EIA_VOLUMES: dict = {
-    "source": ("U.S. Energy Information Administration, World Oil Transit "
-               "Chokepoints"),
+    "source": ("U.S. Energy Information Administration, Global Energy Security "
+               "Data report, World Oil Transit Chokepoints"),
     "url": ("https://www.eia.gov/international/content/analysis/special_topics/"
             "World_Oil_Transit_Chokepoints"),
     "retrieved_at": "2026-09-21",
@@ -196,7 +230,12 @@ def load_lookup(*, no_fetch: bool) -> dict[str, dict]:
 
 
 def load_daily(portid: str, *, no_fetch: bool) -> list[dict]:
-    """All daily rows for one chokepoint from BASE_YEAR on. One query per run."""
+    """All daily rows for one chokepoint from BASE_YEAR on.
+
+    NOT one query per run: this paginates at 1000 rows. See FETCH DISCIPLINE in
+    the module docstring -- currently one request per chokepoint only because
+    the series is 987 rows long.
+    """
     cache = RAW / f"daily_{portid}.json"
     if no_fetch:
         if not cache.exists():
@@ -465,6 +504,12 @@ def main() -> None:
         "schema_version": "1.0.0",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "attribution": ATTRIBUTION,
+        "terms": {
+            "url": TERMS_URL,
+            "effective": TERMS_EFFECTIVE,
+            "provenance": TERMS_READ,
+            "redistribution": REDISTRIBUTION,
+        },
         "retrieved_at": datetime.now(timezone.utc).date().isoformat(),
         "transformation": TRANSFORMATION.format(
             win=WINDOW_DAYS, base_year=BASE_YEAR, war=WAR_START.isoformat()),

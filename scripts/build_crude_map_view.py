@@ -12,6 +12,14 @@ NOTE: scripts/validate_palette.js could NOT be re-run here -- node is not on
 PATH on this box -- so this relies on that prior validation, and the palette is
 byte-identical to it.
 
+THE DELTA OVERLAY PAIR IS THE EXCEPTION AND IS NOT VALIDATED (ruling R4 D2).
+--d1 / --d2 are new in R3 and have no prior validation to inherit. They were
+CHOSEN FOR HUE SEPARATION AND CHECKED BY EYE, NOT VALIDATED: neither
+~/cc-ops/tools/validate_palette.py (absent) nor scripts/validate_palette.js
+(node not on PATH) could be run, and no colour-vision-deficiency simulation was
+performed. Carried forward: once node is on PATH or validate_palette.py is
+restored, re-validate --d1/--d2 including CVD simulation.
+
 Reads only from data/exports/crude-map/. Writes one file. Publishes nothing.
 """
 from __future__ import annotations
@@ -574,8 +582,11 @@ function drawProv() {{
     ['Cracks', d['fred-eia-spot'].source, d['fred-eia-spot'].licence,
      'retrieved ' + d['fred-eia-spot'].retrieved_at.slice(0,10)],
     ...(P.choke ? [['Chokepoints', P.choke.attribution,
-       'IMF terms: attribution + state material transformation; as-is',
-       'retrieved ' + P.choke.retrieved_at + '; ' + P.choke.metric]] : []),
+       'IMF Copyright and Usage, effective ' + (P.choke.terms||{{}}).effective
+         + ': accurate reproduction, attribution, and material transformation'
+         + ' stated alongside the citation; as-is',
+       'retrieved ' + P.choke.retrieved_at + '; ' + P.choke.metric
+         + '; ' + (P.choke.terms||{{}}).redistribution]] : []),
     ['Basemap', 'Natural Earth ' + ne.version + ', ' + ne.basemap_resolution, ne.licence,
      'join on ' + ne.join_key + '; simplification ' + ne.geometric_simplification
      + '; quantized ' + ne.coordinate_quantization_dp + ' dp'],
@@ -584,6 +595,16 @@ function drawProv() {{
     + rows.map(r => '<tr>' + r.map(c => `<td>${{esc(c)}}</td>`).join('') + '</tr>').join('')
     + '</table><p style="font-size:12px;color:var(--ink2);margin:10px 0 0">'
     + esc(P.prov.band) + '</p>'
+    + '<p style="font-size:12px;color:var(--ink2);margin:6px 0 0">'
+    + (P.choke ? '<p style="font-size:12px;color:var(--ink2);margin:6px 0 0">'
+       + '<b>IMF terms.</b> ' + esc((P.choke.terms||{{}}).url) + ', effective '
+       + esc((P.choke.terms||{{}}).effective) + '. '
+       + esc((P.choke.terms||{{}}).redistribution) + '. Terms wording '
+       + esc((P.choke.terms||{{}}).provenance) + '.</p>' : '')
+    + '<p style="font-size:12px;color:var(--ink2);margin:6px 0 0">'
+    + '<b>Delta overlay colours are not validated.</b> The overlay pair was chosen '
+    + 'for hue separation and checked by eye; no palette validator or colour-vision-'
+    + 'deficiency simulation was run on this host.</p>'
     + '<p style="font-size:12px;color:var(--ink2);margin:6px 0 0">'
     + '<b>Required attribution.</b> Flow data: CEPII BACI (Gaulier, G. and Zignago, S. '
     + '(2010), <i>BACI: International Trade Database at the Product-Level</i>, CEPII '
