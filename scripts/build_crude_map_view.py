@@ -12,6 +12,14 @@ NOTE: scripts/validate_palette.js could NOT be re-run here -- node is not on
 PATH on this box -- so this relies on that prior validation, and the palette is
 byte-identical to it.
 
+THE DELTA OVERLAY PAIR IS THE EXCEPTION AND IS NOT VALIDATED (ruling R4 D2).
+--d1 / --d2 are new in R3 and have no prior validation to inherit. They were
+CHOSEN FOR HUE SEPARATION AND CHECKED BY EYE, NOT VALIDATED: neither
+~/cc-ops/tools/validate_palette.py (absent) nor scripts/validate_palette.js
+(node not on PATH) could be run, and no colour-vision-deficiency simulation was
+performed. Carried forward: once node is on PATH or validate_palette.py is
+restored, re-validate --d1/--d2 including CVD simulation.
+
 Reads only from data/exports/crude-map/. Writes one file. Publishes nothing.
 """
 from __future__ import annotations
@@ -34,11 +42,18 @@ W, H = 1180, 560           # equirectangular canvas
 LAT_MAX, LAT_MIN = 84.0, -58.0
 WAR_DATE = "2026-02"       # Iran conflict, 2026-02-27
 
-L = {"s1": "#2a78d6", "s2": "#eb6834", "o1": "#2a78d6", "o2": "#5598e7", "o3": "#86b6ef",
+# d1/d2 are the monthly-delta overlay pair. They deliberately avoid s1 (the
+# measured-flow blue) and s2 (the attributed-residual orange): when the overlay
+# is on, reusing those two made a rise read as a measurement and a fall read as
+# an inference. Teal/magenta collide with neither, and stay separable under
+# deuteranopia and protanopia.
+L = {"s1": "#2a78d6", "s2": "#eb6834", "d1": "#0f8f6f", "d2": "#9b2f8f",
+     "o1": "#2a78d6", "o2": "#5598e7", "o3": "#86b6ef",
      "surface": "#fcfcfb", "plane": "#f9f9f7", "ink": "#0b0b0b", "ink2": "#52514e",
      "muted": "#898781", "grid": "#e1e0d9", "axis": "#c3c2b7", "ring": "rgba(11,11,11,0.10)",
      "land": "#ecebe4", "landline": "#d8d7cd"}
-D = {"s1": "#3987e5", "s2": "#d95926", "o1": "#3987e5", "o2": "#256abf", "o3": "#184f95",
+D = {"s1": "#3987e5", "s2": "#d95926", "d1": "#2fc39a", "d2": "#d97fce",
+     "o1": "#3987e5", "o2": "#256abf", "o3": "#184f95",
      "surface": "#1a1a19", "plane": "#0d0d0d", "ink": "#ffffff", "ink2": "#c3c2b7",
      "muted": "#898781", "grid": "#2c2c2a", "axis": "#383835", "ring": "rgba(255,255,255,0.10)",
      "land": "#242423", "landline": "#343432"}
@@ -147,6 +162,22 @@ def main() -> None:
         },
     }
 
+    # Item 2 (R3): a bowed chord reads the same from either end, so origin and
+    # destination were indistinguishable. Arrowheads settle it.
+    # SVG markers do NOT inherit the path's stroke, so a single black marker
+    # would appear on every flow in both themes. One marker per colour class,
+    # each filled from the same custom property its stroke uses, keeps the head
+    # and its line the same colour in light and dark mode.
+    # markerUnits=userSpaceOnUse (not the strokeWidth default) keeps the head a
+    # constant size: stroke widths here span 1.1..13, and a scaling head would
+    # swamp the map on the largest flows.
+    arrowheads = "\n        ".join(
+        f'<marker id="ah-{mid}" viewBox="0 0 10 10" refX="9" refY="5" '
+        f'markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" '
+        f'orient="auto"><path d="M0.5,1 L10,5 L0.5,9 Z" fill="var(--{var})"/></marker>'
+        for mid, var in (("s1", "s1"), ("s2", "s2"), ("dim", "muted"),
+                         ("d1", "d1"), ("d2", "d2")))
+
     html = f"""<!DOCTYPE html>
 <html lang="en" data-palette="{L['s1']},{L['s2']}">
 <head>
@@ -177,6 +208,10 @@ def main() -> None:
   .arrow.derived {{ stroke-dasharray:5 4; }}
   .arrow.attributed {{ stroke:var(--s2); stroke-dasharray:2 3; }}
   .arrow:hover {{ opacity:1; stroke-width:var(--hw); }}
+  /* With the delta overlay on, the baseline drops to neutral grey so the only
+     colour on the map belongs to the overlay. Id specificity beats .arrow.* */
+  #map.dim .arrow {{ stroke:var(--muted); opacity:.2; marker-end:url(#ah-dim); }}
+  #map.dim #dots circle {{ opacity:.35; }}
   .node {{ fill:var(--o2); fill-opacity:.55; stroke:var(--surface); stroke-width:.7; }}
   .lgd {{ display:flex; gap:18px; flex-wrap:wrap; font-size:12px; color:var(--ink2);
     margin-top:10px; align-items:center; }}
@@ -196,8 +231,21 @@ def main() -> None:
   th {{ color:var(--ink2); font-weight:600; }}
   .slot {{ border:1px dashed var(--axis); border-radius:10px; padding:22px; text-align:center;
     color:var(--muted); font-size:13px; }}
-  .grid2 {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }}
+  .grid2 {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }}
   @media (max-width:900px) {{ .grid2 {{ grid-template-columns:1fr; }} }}
+  /* A 4-column provenance table has a min-content width wider than a 390px
+     phone, and it pushed the whole document 7px wide. Fixed layout pins the
+     table to its container and anywhere-wrapping stops the cells spilling. */
+  @media (max-width:560px) {{
+    .wrap {{ padding:16px 12px 48px; }}
+    table {{ table-layout:fixed; }}
+    th,td {{ padding:4px 6px 4px 0; font-size:11px; overflow-wrap:anywhere; }}
+    /* fixed layout splits columns evenly; the label column carries far more
+       text than the three numeric ones, so give it the room. */
+    #choke th:first-child, #choke td:first-child,
+    #prov th:first-child, #prov td:first-child {{ width:40%; }}
+    input[type=range] {{ width:100%; }}
+  }}
   details {{ margin-top:10px; }} summary {{ cursor:pointer; color:var(--ink2); font-size:12px; }}
 </style>
 </head>
@@ -219,6 +267,9 @@ def main() -> None:
       <label><input type="checkbox" id="eu27only"> EU27 reporters only</label>
     </div>
     <svg id="map" viewBox="0 0 {W} {H}" role="img" aria-label="World crude flow map">
+      <defs>
+        {arrowheads}
+      </defs>
       <g class="land">{land}</g>
       <g id="arrows"></g><g id="nodes"></g><g id="dots"></g>
     </svg>
@@ -299,7 +350,11 @@ function drawYear(yi) {{
     const dx = b[0]-a[0], dy = b[1]-a[1], L = Math.hypot(dx,dy) || 1;
     const cx = mx - dy/L * L*0.14, cy = my + dx/L * L*0.14;   // bow the chord
     const cls = 'arrow' + (f.derived ? ' derived' : '') + (f.attributed ? ' attributed' : '');
+    // marker-end is a presentation attribute, so the #map.dim CSS rule can
+    // still swap it for the grey head when the overlay dims this layer.
+    const head = f.attributed ? 'ah-s2' : 'ah-s1';
     g.push(`<path class="${{cls}}" style="--hw:${{(w+2).toFixed(1)}}" stroke-width="${{w.toFixed(1)}}"
+      marker-end="url(#${{head}})"
       d="M${{a[0]}},${{a[1]}} Q${{cx.toFixed(1)}},${{cy.toFixed(1)}} ${{b[0]}},${{b[1]}}"
       data-i="${{sl.flows.indexOf(f)}}"></path>`);
   }}
@@ -354,21 +409,30 @@ function drawNodes(on) {{
 function drawDeltas(on, eu27only) {{
   const g = document.getElementById('arrows');
   document.querySelectorAll('.dov').forEach(e => e.remove());
-  if (!on) {{ $('#dnote').textContent = ''; return; }}
+  // Dim the measured-flow layer to neutral grey while the overlay is on, so
+  // the only colour on the map is the overlay's.
+  $('#map').classList.toggle('dim', !!on);
+  if (!on) {{ $('#dnote').innerHTML = ''; return; }}
   // Drawing all ~370 deltas is a hairball that reads as noise. The flow layer
   // shows a top-40 slice; the overlay matches it, ranked by absolute change,
   // and says how many of how many are on screen.
   const pool = P.deltas.filter(d => !eu27only || d.src === 'US' || d.eu27);
   const rows = pool.slice().sort((a, b) => Math.abs(b.dm) - Math.abs(a.dm)).slice(0, 40);
   const mx = Math.max(...rows.map(d => Math.abs(d.dm))) || 1;
-  $('#dnote').textContent =
+  $('#dnote').innerHTML =
     `monthly delta overlay: top ${{rows.length}} of ${{pool.length}} pairs by absolute change`
-    + ` \u00b7 blue = up, orange = down, grey dashed = stale, faded = partial baseline`;
+    + ` &middot; <i class="sw" style="border-top-color:var(--d1)"></i>rise`
+    + ` <i class="sw" style="border-top-color:var(--d2)"></i>fall`
+    + ` <i class="sw d" style="border-top-color:var(--muted)"></i>stale`
+    + ` &middot; faded = partial baseline &middot; grey base layer = the 2024 flow baseline`;
   const frag = rows.map((d, i) => {{
     const a = P.pts[d.o], b = P.pts[d.d];
     if (!a || !b) return '';
     const w = Math.max(1.2, Math.abs(d.dm) / mx * 9);
-    const col = d.stale ? 'var(--muted)' : (d.dm < 0 ? 'var(--s2)' : 'var(--s1)');
+    // NOT s1/s2: those are the measured-flow and attributed-residual colours,
+    // and reusing them here made an overlay delta read as a base-layer fact.
+    const col = d.stale ? 'var(--muted)' : (d.dm < 0 ? 'var(--d2)' : 'var(--d1)');
+    const dhead = d.stale ? 'ah-dim' : (d.dm < 0 ? 'ah-d2' : 'ah-d1');
     const op = d.stale || d.partial ? .32 : .8;
     const mx2 = (a[0]+b[0])/2, my2 = (a[1]+b[1])/2;
     const dx = b[0]-a[0], dy = b[1]-a[1], LL = Math.hypot(dx,dy) || 1;
@@ -376,7 +440,7 @@ function drawDeltas(on, eu27only) {{
     return `<path class="dov" fill="none"
       d="M${{a[0]}},${{a[1]}} Q${{cx.toFixed(1)}},${{cy.toFixed(1)}} ${{b[0]}},${{b[1]}}"
       stroke="${{col}}" stroke-width="${{w.toFixed(1)}}" opacity="${{op}}"
-      stroke-linecap="round"
+      stroke-linecap="round" marker-end="url(#${{dhead}})"
       stroke-dasharray="${{d.stale ? '3 5' : 'none'}}" data-i="${{i}}"/>`;
   }}).join('');
   g.insertAdjacentHTML('beforeend', frag);
@@ -387,8 +451,8 @@ function drawDeltas(on, eu27only) {{
       ${{d.pct == null ? '<span class="m"> (percentage suppressed: baseline under 0.05 mb/d)</span>'
                       : ` (${{d.pct > 0 ? '+' : ''}}${{d.pct.toFixed(1)}}%)`}}<br>
       <span class="m">${{esc(d.win)}} vs ${{esc(d.base)}}</span>
-      ${{d.stale ? '<br><b style="color:var(--s2)">STALE &mdash; not a current figure</b>' : ''}}
-      ${{d.partial ? '<br><b style="color:var(--s2)">partial baseline</b>' : ''}}
+      ${{d.stale ? '<br><b style="color:var(--d2)">STALE &mdash; not a current figure</b>' : ''}}
+      ${{d.partial ? '<br><b style="color:var(--d2)">partial baseline</b>' : ''}}
       <br><span class="m">${{esc(d.basis)}}</span>`);
     l.onmouseleave = hide;
   }});
@@ -435,19 +499,30 @@ function drawChoke() {{
   const C = P.choke;
   if (!C) {{ $('#choke').innerHTML =
     '<div class="slot">not built &mdash; run scripts/build_chokepoint_gauge.py</div>'; return; }}
-  $('#chokesub').innerHTML = `Daily tanker transits, ${{C.chokepoints[0].window_days}}-day trailing mean.`
+  $('#chokesub').innerHTML = `Daily tanker transits &mdash; a count of <b>vessels, not barrels</b> &mdash;`
+    + ` ${{C.chokepoints[0].window_days}}-day trailing mean.`
     + ` <b>${{esc(C.attribution)}}</b>, retrieved ${{esc(C.retrieved_at)}}.`;
   const rows = C.chokepoints.map(g => {{
     if (!g.usable) return `<tr><td>${{esc(g.chokepoint)}}</td><td colspan="3">no data</td></tr>`;
     const a = g.vs_same_window_2024.change_pct, b = g.vs_pre_conflict_mean.change_pct;
     const pill = v => v == null ? '&mdash;'
       : `<span style="color:${{v < 0 ? 'var(--s2)' : 'var(--s1)'}}">${{v > 0 ? '+' : ''}}${{v}}%</span>`;
-    // An AIS-degraded fall is a floor, not a decline. Say so in the row.
+    // AIS degradation bounds the MAGNITUDE, not the direction. The row says
+    // which of the two is unreliable, and whether barrels corroborate it.
+    const ev = g.eia_volumes;
     const warn = g.ais_degraded
-      ? `<div style="font-size:11px;color:var(--s2);margin-top:2px"><b>AIS-degraded &mdash; lower bound</b></div>`
+      ? `<div style="font-size:11px;color:var(--d2);margin-top:2px"><b>AIS-degraded &mdash; count is a lower bound, % unreliable</b></div>`
+      : '';
+    const vol = ev
+      ? `<div style="font-size:11px;color:var(--ink2);margin-top:2px">EIA volume `
+        + `<b>${{ev.direction === 'down' ? '&darr;' : '&uarr;'}} `
+        + `${{Object.values(ev.quarters).join(' &rarr; ')}} mb/d</b> `
+        + `(${{Object.keys(ev.quarters).join(' &rarr; ')}})`
+        + (ev.agrees_with_transit_count ? ' &mdash; direction corroborated'
+             : ' &mdash; <b>opposite to the count</b>') + `</div>`
       : '';
     return `<tr data-i="${{C.chokepoints.indexOf(g)}}">
-      <td><b>${{esc(g.chokepoint)}}</b>${{warn}}</td>
+      <td><b>${{esc(g.chokepoint)}}</b>${{warn}}${{vol}}</td>
       <td>${{g.tanker_transits_per_day}}/day</td>
       <td>${{pill(a)}}</td><td>${{pill(b)}}</td></tr>`;
   }}).join('');
@@ -455,9 +530,23 @@ function drawChoke() {{
     <th>vs same window 2024</th><th>vs pre-conflict</th></tr>${{rows}}</table>`
     + (C.corroboration && C.corroboration.collapsed_chokepoints.length
        ? `<p style="font-size:12px;color:var(--ink2);margin:10px 0 0;padding:8px 10px;
-            border-left:3px solid var(--s2);background:var(--plane)">
+            border-left:3px solid var(--d2);background:var(--plane)">
           <b>Read this before quoting the fall.</b> ${{esc(C.corroboration.verdict)}}</p>`
        : '')
+    + (C.counts_are_not_volumes
+       ? `<p style="font-size:12px;color:var(--ink2);margin:8px 0 0;padding:8px 10px;
+            border-left:3px solid var(--d1);background:var(--plane)">
+          ${{esc(C.counts_are_not_volumes)}}</p>`
+       : '')
+    + (C.not_shown ? `<p style="font-size:12px;color:var(--ink2);margin:8px 0 4px">
+         <b>What this panel does not show.</b></p><ul style="font-size:12px;
+         color:var(--ink2);margin:0;padding-left:18px">`
+       + C.not_shown.map(n => `<li><b>${{esc(n.what)}}</b> &mdash; ${{esc(n.why)}}</li>`).join('')
+       + `</ul>` : '')
+    + (C.eia_volumes ? `<p style="font-size:11px;color:var(--muted);margin:8px 0 0">
+         Volume figures: ${{esc(C.eia_volumes.source)}} (${{esc(C.eia_volumes.metric)}}),
+         retrieved ${{esc(C.eia_volumes.retrieved_at)}}.
+         ${{esc(C.eia_volumes.period_caveat)}}</p>` : '')
     + `<p style="font-size:11px;color:var(--muted);margin:8px 0 0">${{esc(C.transformation)}}
        ${{esc(C.disclaimer)}}</p>`;
   $('#choke').querySelectorAll('tr[data-i]').forEach(tr => {{
@@ -469,8 +558,9 @@ function drawChoke() {{
       <span class="m">pre-conflict mean to ${{esc(g.vs_pre_conflict_mean.through)}}:
         ${{g.vs_pre_conflict_mean.tanker_transits_per_day}}/day
         over ${{g.vs_pre_conflict_mean.days}} days</span>
-      ${{g.ais_degraded ? `<br><b style="color:var(--s2)">${{esc(g.render_as)}}</b><br>
+      ${{g.ais_degraded ? `<br><b style="color:var(--d2)">${{esc(g.render_as)}}</b><br>
         <span class="m">${{esc(g.ais_note)}}</span>` : ''}}
+      ${{g.eia_volumes ? `<br><span class="m">${{esc(g.eia_volumes.note)}}</span>` : ''}}
       <br><span class="m">${{esc(g.reading)}}</span>
       <br><span class="m">${{esc(C.attribution)}}</span>`);
     tr.onmouseleave = hide;
@@ -481,14 +571,22 @@ function drawChoke() {{
 function drawProv() {{
   const ne = P.prov.ne, d = P.prov.defs;
   const rows = [
-    ['Flows', 'CEPII BACI HS92 release 202601, guarded volumes', 'annual, ends 2024', ''],
+    // R3 item 4: the licence cell held the vintage and notes was blank. BACI is
+    // Etalab 2.0 (verified at CEPII 2026-09-21), which requires the source be
+    // named -- so the attribution line below is a licence condition, not a
+    // courtesy.
+    ['Flows', 'CEPII BACI HS92 release 202601, guarded volumes',
+     'Etalab Open Licence 2.0 (attribution required)', 'annual, ends 2024'],
     ['Refineries', d['climatetrace-v6'].source, d['climatetrace-v6'].licence,
      'retrieved ' + d['climatetrace-v6'].retrieved_at.slice(0,10)],
     ['Cracks', d['fred-eia-spot'].source, d['fred-eia-spot'].licence,
      'retrieved ' + d['fred-eia-spot'].retrieved_at.slice(0,10)],
     ...(P.choke ? [['Chokepoints', P.choke.attribution,
-       'IMF terms: attribution + state material transformation; as-is',
-       'retrieved ' + P.choke.retrieved_at + '; ' + P.choke.metric]] : []),
+       'IMF Copyright and Usage, effective ' + (P.choke.terms||{{}}).effective
+         + ': accurate reproduction, attribution, and material transformation'
+         + ' stated alongside the citation; as-is',
+       'retrieved ' + P.choke.retrieved_at + '; ' + P.choke.metric
+         + '; ' + (P.choke.terms||{{}}).redistribution]] : []),
     ['Basemap', 'Natural Earth ' + ne.version + ', ' + ne.basemap_resolution, ne.licence,
      'join on ' + ne.join_key + '; simplification ' + ne.geometric_simplification
      + '; quantized ' + ne.coordinate_quantization_dp + ' dp'],
@@ -497,7 +595,22 @@ function drawProv() {{
     + rows.map(r => '<tr>' + r.map(c => `<td>${{esc(c)}}</td>`).join('') + '</tr>').join('')
     + '</table><p style="font-size:12px;color:var(--ink2);margin:10px 0 0">'
     + esc(P.prov.band) + '</p>'
-    + '<p style="font-size:12px;color:var(--ink2);margin:6px 0 0"><b>Attribution:</b> '
+    + '<p style="font-size:12px;color:var(--ink2);margin:6px 0 0">'
+    + (P.choke ? '<p style="font-size:12px;color:var(--ink2);margin:6px 0 0">'
+       + '<b>IMF terms.</b> ' + esc((P.choke.terms||{{}}).url) + ', effective '
+       + esc((P.choke.terms||{{}}).effective) + '. '
+       + esc((P.choke.terms||{{}}).redistribution) + '. Terms wording '
+       + esc((P.choke.terms||{{}}).provenance) + '.</p>' : '')
+    + '<p style="font-size:12px;color:var(--ink2);margin:6px 0 0">'
+    + '<b>Delta overlay colours are not validated.</b> The overlay pair was chosen '
+    + 'for hue separation and checked by eye; no palette validator or colour-vision-'
+    + 'deficiency simulation was run on this host.</p>'
+    + '<p style="font-size:12px;color:var(--ink2);margin:6px 0 0">'
+    + '<b>Required attribution.</b> Flow data: CEPII BACI (Gaulier, G. and Zignago, S. '
+    + '(2010), <i>BACI: International Trade Database at the Product-Level</i>, CEPII '
+    + 'Working Paper 2010-23), distributed under the Etalab Open Licence 2.0, which '
+    + 'permits any reuse provided the source is mentioned.</p>'
+    + '<p style="font-size:12px;color:var(--ink2);margin:6px 0 0"><b>Attributed codes:</b> '
     + Object.entries(ne.attributed_codes || {{}}).map(([k,v]) =>
         `${{k}} &rarr; ${{v.iso3}} (${{esc(v.confidence)}})`).join('; ')
     + ' &mdash; drawn distinctly and never as a measurement.</p>';
