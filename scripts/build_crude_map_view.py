@@ -112,6 +112,9 @@ def main() -> None:
                 "win": r["trailing_period"], "base": r["baseline_period"],
             })
 
+    gauge_path = SRC / "chokepoint-gauge.json"
+    choke = json.loads(gauge_path.read_text(encoding="utf-8")) if gauge_path.exists() else None
+
     cracks = [{"hub": c["hub_id"], "label": c["label"],
                "series": [[m["period"], m["crack_usd_per_bbl"]] for m in c["monthly"]]}
               for c in dataset["crack_spreads"]]
@@ -134,6 +137,7 @@ def main() -> None:
         "pts": pts, "names": cen["names"], "nodes": nodes,
         "deltas": deltas, "cracks": cracks,
         "war": WAR_DATE,
+        "choke": choke,
         "prov": {
             "ne": prov["natural_earth"],
             "defs": dataset["provenance_defs"],
@@ -250,12 +254,9 @@ def main() -> None:
       </p>
     </div>
     <div class="card">
-      <b>Chokepoint transit gauge</b>
-      <p class="m" style="font-size:12px;color:var(--ink2);margin:6px 0 12px">
-        Reserved for IMF PortWatch daily tanker transits &mdash; Hormuz, Bab el-Mandeb, Suez,
-        Malacca, Cape &mdash; against both the same period in 2024 and the pre-2026-02-27 average.
-      </p>
-      <div class="slot">slot reserved &mdash; Step&nbsp;3, licence check first</div>
+      <b>Chokepoint tanker transits</b>
+      <p class="m" style="font-size:12px;color:var(--ink2);margin:6px 0 10px" id="chokesub"></p>
+      <div id="choke"></div>
     </div>
   </div>
 
@@ -429,6 +430,53 @@ function drawCrack() {{
   $('#crack').innerHTML = out;
 }}
 
+// ---- chokepoint gauge --------------------------------------------------
+function drawChoke() {{
+  const C = P.choke;
+  if (!C) {{ $('#choke').innerHTML =
+    '<div class="slot">not built &mdash; run scripts/build_chokepoint_gauge.py</div>'; return; }}
+  $('#chokesub').innerHTML = `Daily tanker transits, ${{C.chokepoints[0].window_days}}-day trailing mean.`
+    + ` <b>${{esc(C.attribution)}}</b>, retrieved ${{esc(C.retrieved_at)}}.`;
+  const rows = C.chokepoints.map(g => {{
+    if (!g.usable) return `<tr><td>${{esc(g.chokepoint)}}</td><td colspan="3">no data</td></tr>`;
+    const a = g.vs_same_window_2024.change_pct, b = g.vs_pre_conflict_mean.change_pct;
+    const pill = v => v == null ? '&mdash;'
+      : `<span style="color:${{v < 0 ? 'var(--s2)' : 'var(--s1)'}}">${{v > 0 ? '+' : ''}}${{v}}%</span>`;
+    // An AIS-degraded fall is a floor, not a decline. Say so in the row.
+    const warn = g.ais_degraded
+      ? `<div style="font-size:11px;color:var(--s2);margin-top:2px"><b>AIS-degraded &mdash; lower bound</b></div>`
+      : '';
+    return `<tr data-i="${{C.chokepoints.indexOf(g)}}">
+      <td><b>${{esc(g.chokepoint)}}</b>${{warn}}</td>
+      <td>${{g.tanker_transits_per_day}}/day</td>
+      <td>${{pill(a)}}</td><td>${{pill(b)}}</td></tr>`;
+  }}).join('');
+  $('#choke').innerHTML = `<table><tr><th>chokepoint</th><th>now</th>
+    <th>vs same window 2024</th><th>vs pre-conflict</th></tr>${{rows}}</table>`
+    + (C.corroboration && C.corroboration.collapsed_chokepoints.length
+       ? `<p style="font-size:12px;color:var(--ink2);margin:10px 0 0;padding:8px 10px;
+            border-left:3px solid var(--s2);background:var(--plane)">
+          <b>Read this before quoting the fall.</b> ${{esc(C.corroboration.verdict)}}</p>`
+       : '')
+    + `<p style="font-size:11px;color:var(--muted);margin:8px 0 0">${{esc(C.transformation)}}
+       ${{esc(C.disclaimer)}}</p>`;
+  $('#choke').querySelectorAll('tr[data-i]').forEach(tr => {{
+    const g = C.chokepoints[+tr.dataset.i];
+    tr.onmousemove = e => show(e, `<b>${{esc(g.chokepoint)}}</b><br>
+      ${{esc(g.window)}} &middot; <b>${{g.tanker_transits_per_day}}</b> tanker transits/day<br>
+      <span class="m">vs ${{esc(g.vs_same_window_2024.window)}}:
+        ${{g.vs_same_window_2024.tanker_transits_per_day}}/day</span><br>
+      <span class="m">pre-conflict mean to ${{esc(g.vs_pre_conflict_mean.through)}}:
+        ${{g.vs_pre_conflict_mean.tanker_transits_per_day}}/day
+        over ${{g.vs_pre_conflict_mean.days}} days</span>
+      ${{g.ais_degraded ? `<br><b style="color:var(--s2)">${{esc(g.render_as)}}</b><br>
+        <span class="m">${{esc(g.ais_note)}}</span>` : ''}}
+      <br><span class="m">${{esc(g.reading)}}</span>
+      <br><span class="m">${{esc(C.attribution)}}</span>`);
+    tr.onmouseleave = hide;
+  }});
+}}
+
 // ---- provenance --------------------------------------------------------
 function drawProv() {{
   const ne = P.prov.ne, d = P.prov.defs;
@@ -438,6 +486,9 @@ function drawProv() {{
      'retrieved ' + d['climatetrace-v6'].retrieved_at.slice(0,10)],
     ['Cracks', d['fred-eia-spot'].source, d['fred-eia-spot'].licence,
      'retrieved ' + d['fred-eia-spot'].retrieved_at.slice(0,10)],
+    ...(P.choke ? [['Chokepoints', P.choke.attribution,
+       'IMF terms: attribution + state material transformation; as-is',
+       'retrieved ' + P.choke.retrieved_at + '; ' + P.choke.metric]] : []),
     ['Basemap', 'Natural Earth ' + ne.version + ', ' + ne.basemap_resolution, ne.licence,
      'join on ' + ne.join_key + '; simplification ' + ne.geometric_simplification
      + '; quantized ' + ne.coordinate_quantization_dp + ' dp'],
@@ -461,7 +512,7 @@ function render() {{
 }}
 yr.oninput = render;
 ['showref','showdelta','eu27only'].forEach(id => $('#'+id).onchange = render);
-render(); drawCrack(); drawProv();
+render(); drawCrack(); drawProv(); drawChoke();
 </script>
 </body>
 </html>
