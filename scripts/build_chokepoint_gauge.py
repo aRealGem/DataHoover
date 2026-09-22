@@ -28,30 +28,36 @@ No raw IMF rows are redistributed -- the derived gauge only.
 WHAT IS NOT COMMITTED. Raw IMF rows stay under data/raw/portwatch/, which is
 gitignored. Only code, tests and the derived gauge leave this script.
 
-FETCH DISCIPLINE, AS THE CODE ACTUALLY BEHAVES (audited 2026-09-21 under ruling
-R4 -- stated, deliberately not "fixed", because three of the four properties the
-ruling asked me to confirm are NOT true today):
+FETCH DISCIPLINE (hardened under ruling R5, 2026-09-21). The R4 audit found
+three of four properties false; all four now hold, and the drift test below
+asserts each one against the code:
 
-  * Cadence is weekly at most. --no-fetch replays the cache and makes NO request.
-  * The chokepoint lookup is fetched ONCE EVER and cached; later runs read the
-    cache. But that one call is `where=1=1`, which IS an enumeration of the
-    lookup FeatureServer: it returned all 28 chokepoints when we need 5.
-  * Each chokepoint's daily series is fetched with a PAGINATION LOOP
-    (resultOffset += 1000), not a single request. It happens to be one request
-    per chokepoint right now only because each series holds 987 rows against a
-    1000-row page. Headroom is 13 days: once the series passes 1000 rows -- on
-    current daily growth, around 2026-09-26 -- every weekly run silently becomes
-    two requests per chokepoint.
-  * There is NO rate-limit handling: `_get` makes a bare urlopen with no retry,
-    no backoff, and no reading of Retry-After or 429. A throttle surfaces as an
-    unhandled HTTPError.
-  * load_daily ignores its cache unless --no-fetch, so a normal weekly run
-    always refetches all five series: 5 requests/week today, 10 after the page
-    boundary is crossed.
+  * SCOPED, NOT ENUMERATED. The lookup asks for the five wanted chokepoints by
+    name -- `portname IN (...)` -- and asserts the response holds exactly five,
+    raising otherwise. The previous `where=1=1` pulled all 28.
+  * INCREMENTAL. The cache is the source of truth. A normal run reads it and
+    requests only rows dated after the newest row already held, so a weekly run
+    asks for ~7 rows rather than ~987. A full pull requires --refetch.
+  * PAGINATION IS CAPPED, NEVER A LOOP. MAX_PAGES = 3 per chokepoint per run.
+    Exceeding it raises PortWatchError with a message saying what to do; it
+    cannot spin.
+  * THROTTLE-AWARE. 429 and 5xx honour Retry-After up to 60s and are retried
+    AT MOST ONCE, then raise PortWatchRateLimited. Any other 4xx raises
+    immediately with no retry. Every response logs status, content-type, byte
+    length and body head -- the shape the GDELT connector already uses.
 
-  Against the IMF's "no automated BULK download" condition, five derived-series
-  queries a week is not bulk; the enumeration and the unbounded pagination loop
-  are the two things worth a reviewer's eye before this ever runs unattended.
+  Cadence is weekly at most. --no-fetch replays the cache and makes NO request.
+  Steady-state volume is 5 requests/week (one per chokepoint) with the lookup
+  served from cache after its first and only fetch.
+
+  CAVEAT, UNVERIFIED: the incremental date literal (DATE_PREDICATE) has been
+  exercised only against the test stub -- R5 forbids a live request, so the
+  syntax has not met the real service. A rejection would surface as a loud HTTP
+  error, never as silently wrong rows. Watch the first live run.
+
+  NOT SCHEDULED. This gauge is not on the weekly chain -- see Q1 of the R5
+  return: nothing in scripts/run-weekly.sh or scripts/run-full-pipeline.sh
+  references it, and neither PR touches those files. It runs by hand only.
 
 AIS DEGRADATION IS A FIRST-CLASS STATE, not a footnote -- but it bounds the
 MAGNITUDE, not the DIRECTION. Where PortWatch warns of GPS jamming, AIS
@@ -71,6 +77,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
@@ -208,54 +215,188 @@ def eia_series(name: str) -> tuple[float, float, str, str] | None:
     return s[qs[0]], s[qs[-1]], qs[0], qs[-1]
 
 
-def _get(url: str, params: dict, *, timeout: int = 120) -> dict:
+class PortWatchError(RuntimeError):
+    """The fetcher refused to continue. Always says why, never guesses."""
+
+
+class PortWatchRateLimited(PortWatchError):
+    """429 or 5xx, already retried once. Distinct so a caller can tell a
+    throttle from a malformed request."""
+
+
+PAGE_ROWS = 1000
+MAX_PAGES = 3                 # hard cap per chokepoint per run; never loops
+RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+MAX_RETRY_WAIT = 60           # seconds; Retry-After is honoured up to this
+DEFAULT_RETRY_WAIT = 5        # when the server throttles but says nothing
+
+# ArcGIS date-literal form for the incremental predicate.
+# UNVERIFIED AGAINST THE LIVE SERVICE: ruling R5 forbids a live request, so
+# this syntax has only been exercised against the test stub. If PortWatch
+# rejects it the run FAILS LOUD (an HTTP error, never silently wrong rows);
+# the documented alternative is "date > timestamp '{d} 00:00:00'".
+DATE_PREDICATE = "date > DATE '{d}'"
+
+# Injection seam. Tests replace TRANSPORT; nothing else in the module knows
+# whether it is talking to urllib or a stub.
+class _UrllibTransport:
+    def open(self, url: str, headers: dict, timeout: int):
+        return urllib.request.urlopen(
+            urllib.request.Request(url, headers=headers), timeout=timeout)
+
+
+TRANSPORT = _UrllibTransport()
+
+
+def _sql_quote(v: str) -> str:
+    return str(v).replace("'", "''")
+
+
+def _diagnostics(status, headers, body: bytes, body_chars: int = 300) -> str:
+    """status / content-type / byte length / body head -- the same shape the
+    GDELT connector logs, so both read alike in a journal."""
+    head = body[:body_chars].decode("utf-8", errors="replace").replace("\n", " ")
+    ctype = (headers.get("Content-Type") if headers else None) or "(none)"
+    return (f"status={status} content-type={ctype!r} "
+            f"bytes={len(body)} head={head!r}")
+
+
+def _retry_after_seconds(headers) -> int:
+    """Honour Retry-After up to MAX_RETRY_WAIT. Seconds form only; an
+    HTTP-date we cannot parse falls back to the default rather than sleeping
+    for an unknown length of time."""
+    raw = headers.get("Retry-After") if headers else None
+    if raw is None:
+        return DEFAULT_RETRY_WAIT
+    try:
+        wait = int(str(raw).strip())
+    except ValueError:
+        return DEFAULT_RETRY_WAIT
+    return max(0, min(wait, MAX_RETRY_WAIT))
+
+
+def _get(url: str, params: dict, *, timeout: int = 120, _attempt: int = 0) -> dict:
+    """One request. Retries AT MOST ONCE, and only on 429/5xx."""
     full = url + "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(full, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
+    try:
+        with TRANSPORT.open(full, {"User-Agent": UA}, timeout) as r:
+            body = r.read()
+            print(f"  portwatch {_diagnostics(getattr(r, 'status', 200), r.headers, body)}")
+            return json.loads(body.decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = b""
+        try:
+            body = e.read() or b""
+        except Exception:                      # body already consumed
+            pass
+        print(f"  portwatch {_diagnostics(e.code, e.headers, body)}")
+        if e.code not in RETRY_STATUSES:
+            raise PortWatchError(
+                f"PortWatch returned HTTP {e.code}; not retried "
+                f"(only 429/5xx are). {_diagnostics(e.code, e.headers, body)}"
+            ) from e
+        if _attempt:
+            raise PortWatchRateLimited(
+                f"PortWatch returned HTTP {e.code} again after one retry; "
+                f"giving up. {_diagnostics(e.code, e.headers, body)}"
+            ) from e
+        wait = _retry_after_seconds(e.headers)
+        print(f"  portwatch HTTP {e.code}; one retry in {wait}s")
+        time.sleep(wait)
+        return _get(url, params, timeout=timeout, _attempt=1)
 
 
 def load_lookup(*, no_fetch: bool) -> dict[str, dict]:
+    """Resolve the five wanted chokepoints. Asks for exactly those five by
+    name -- never `where=1=1`, which enumerated all 28."""
     cache = RAW / "chokepoints_lookup.json"
     if no_fetch or cache.exists():
         if not cache.exists():
             raise SystemExit(f"--no-fetch but no cache at {cache}")
         d = json.loads(cache.read_text(encoding="utf-8"))
     else:
-        d = _get(LOOKUP, {"where": "1=1", "f": "json", "returnGeometry": "false",
+        names = ", ".join(f"'{_sql_quote(n)}'" for n in WANTED)
+        d = _get(LOOKUP, {"where": f"portname IN ({names})", "f": "json",
+                          "returnGeometry": "false",
                           "outFields": "portid,portname,fullname,country,ISO3,lat,lon"})
+        got = d.get("features", [])
+        if len(got) != len(WANTED):
+            raise PortWatchError(
+                f"lookup asked for {len(WANTED)} chokepoints by name and got "
+                f"{len(got)}. Wanted {WANTED}; returned "
+                f"{[f.get('attributes', {}).get('portname') for f in got]}. "
+                "Refusing to continue on a partial or over-broad resolution."
+            )
         RAW.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps(d), encoding="utf-8")
     return {f["attributes"]["portname"]: f["attributes"] for f in d.get("features", [])}
 
 
-def load_daily(portid: str, *, no_fetch: bool) -> list[dict]:
-    """All daily rows for one chokepoint from BASE_YEAR on.
+def _row_date(r: dict) -> date | None:
+    return to_date(r.get("date"))
 
-    NOT one query per run: this paginates at 1000 rows. See FETCH DISCIPLINE in
-    the module docstring -- currently one request per chokepoint only because
-    the series is 987 rows long.
+
+def _merge_rows(cached: list[dict], fresh: list[dict]) -> list[dict]:
+    """Cache is the source of truth; fresh rows win on a repeated date."""
+    by_date = {}
+    for r in list(cached) + list(fresh):
+        d = _row_date(r)
+        if d is not None:
+            by_date[d] = r
+    return [by_date[k] for k in sorted(by_date)]
+
+
+def load_daily(portid: str, *, no_fetch: bool, refetch: bool = False) -> list[dict]:
+    """Daily rows for one chokepoint, INCREMENTALLY.
+
+    A normal run reads the cache and asks only for dates after the newest row
+    it already holds. A full pull needs --refetch. Pagination is capped at
+    MAX_PAGES and raises rather than looping.
     """
     cache = RAW / f"daily_{portid}.json"
+    cached: list[dict] = []
+    if cache.exists():
+        cached = json.loads(cache.read_text(encoding="utf-8"))
     if no_fetch:
         if not cache.exists():
             raise SystemExit(f"--no-fetch but no cache at {cache}")
-        return json.loads(cache.read_text(encoding="utf-8"))
+        return cached
 
-    rows, offset = [], 0
-    while True:
+    base_where = f"portid='{_sql_quote(portid)}' AND year>={BASE_YEAR}"
+    if refetch:
+        cached, where = [], base_where
+    else:
+        dates = [d for d in (_row_date(r) for r in cached) if d]
+        newest = max(dates) if dates else None
+        where = (f"{base_where} AND {DATE_PREDICATE.format(d=newest.isoformat())}"
+                 if newest else base_where)
+
+    fresh: list[dict] = []
+    offset = 0
+    for page in range(1, MAX_PAGES + 2):
+        if page > MAX_PAGES:
+            raise PortWatchError(
+                f"{portid}: hit the {MAX_PAGES}-page cap for one run "
+                f"({MAX_PAGES * PAGE_ROWS} rows) and stopped. This is a guard, "
+                "not a transient error -- either the incremental window is far "
+                "wider than expected, or --refetch was used on a series that no "
+                "longer fits. Re-run with --refetch, or raise MAX_PAGES "
+                "deliberately."
+            )
         d = _get(DAILY, {
-            "where": f"portid='{portid}' AND year>={BASE_YEAR}",
+            "where": where,
             "outFields": f"date,portid,portname,{TANKER_FIELD}",
             "orderByFields": "date ASC", "returnGeometry": "false",
-            "f": "json", "resultOffset": offset, "resultRecordCount": 1000,
+            "f": "json", "resultOffset": offset, "resultRecordCount": PAGE_ROWS,
         })
         got = d.get("features", [])
-        rows.extend(a["attributes"] for a in got)
-        if len(got) < 1000 or not d.get("exceededTransferLimit"):
+        fresh.extend(a["attributes"] for a in got)
+        if len(got) < PAGE_ROWS or not d.get("exceededTransferLimit"):
             break
-        offset += 1000
+        offset += PAGE_ROWS
         time.sleep(1.0)
+
+    rows = _merge_rows(cached, fresh)
     RAW.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(rows), encoding="utf-8")
     return rows
@@ -472,7 +613,12 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-fetch", action="store_true",
                     help="replay the cache; make no request")
+    ap.add_argument("--refetch", action="store_true",
+                    help="discard the cached series and pull the full history "
+                         "again; a normal run is incremental")
     args = ap.parse_args()
+    if args.refetch and args.no_fetch:
+        raise SystemExit("--refetch and --no-fetch are contradictory")
     OUT.mkdir(parents=True, exist_ok=True)
 
     lookup = load_lookup(no_fetch=args.no_fetch)
@@ -487,8 +633,8 @@ def main() -> None:
     for i, name in enumerate(WANTED):
         pid = lookup[name]["portid"]
         if not args.no_fetch and i:
-            time.sleep(1.5)                   # one polite query per chokepoint
-        rows = load_daily(pid, no_fetch=args.no_fetch)
+            time.sleep(1.5)                   # space the per-chokepoint calls
+        rows = load_daily(pid, no_fetch=args.no_fetch, refetch=args.refetch)
         g = gauge(name, rows)
         g["portid"] = pid
         g["portname"] = lookup[name].get("fullname") or name
