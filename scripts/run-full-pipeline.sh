@@ -17,11 +17,24 @@ Usage: ./scripts/run-full-pipeline.sh
   Writes a per-step report to data/snapshots/last-pipeline-run.txt
 
   Environment: PYTHONPATH is set to ./src if `hoover` is not on PATH (uses python3, else python).
+               DATAHOOVER_HOOVER_BIN  use this hoover binary instead of the PATH lookup.
+               DATAHOOVER_REPORT_DIR  write the report here instead of data/snapshots.
 USAGE
   exit 0
 fi
 
-if command -v hoover >/dev/null 2>&1; then
+# DATAHOOVER_HOOVER_BIN pins the binary explicitly and wins over PATH. The
+# tests need this: run-weekly.sh activates .venv, which PREPENDS .venv/bin to
+# PATH, so a stub placed on PATH was shadowed by the real hoover and pytest ran
+# the live ingest chain against the production warehouse (CW-208). A set but
+# unusable value is an error, never a silent fall-through to the real binary.
+if [[ -n "${DATAHOOVER_HOOVER_BIN:-}" ]]; then
+  if [[ ! -x "${DATAHOOVER_HOOVER_BIN}" ]]; then
+    echo "DATAHOOVER_HOOVER_BIN=${DATAHOOVER_HOOVER_BIN} is not an executable file" >&2
+    exit 2
+  fi
+  HOOVER=("${DATAHOOVER_HOOVER_BIN}")
+elif command -v hoover >/dev/null 2>&1; then
   HOOVER=(hoover)
 else
   export PYTHONPATH="${ROOT}/src:${PYTHONPATH:-}"
@@ -32,7 +45,7 @@ else
   fi
 fi
 
-REPORT_DIR="${ROOT}/data/snapshots"
+REPORT_DIR="${DATAHOOVER_REPORT_DIR:-${ROOT}/data/snapshots}"
 mkdir -p "${REPORT_DIR}"
 REPORT="${REPORT_DIR}/last-pipeline-run.txt"
 STAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
