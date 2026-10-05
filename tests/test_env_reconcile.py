@@ -20,15 +20,31 @@ PIPELINE = ROOT / "scripts" / "run-full-pipeline.sh"
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="bash scripts are Unix-only")
 
 
+def _calls(stub: Path) -> Path:
+    return stub.parent / "stub-hoover-calls.log"
+
+
 def _run(env_file: str, stub: Path, extra: dict | None = None) -> str:
-    """Drive the real ExecStart target with a stub CLI. No network, no DB."""
+    """Drive the real ExecStart target with a stub CLI. No network, no DB.
+
+    run-weekly.sh activates .venv, which prepends .venv/bin to PATH, so a stub
+    placed on PATH alone is shadowed by the real hoover (CW-208). The stub is
+    pinned with DATAHOOVER_HOOVER_BIN instead, the report goes to a temp dir,
+    and every run must prove the stub was the binary actually invoked.
+    """
     env = {"HOME": os.environ.get("HOME", "/tmp"),
            "PATH": f"{stub}:/usr/bin:/bin",
-           "DATAHOOVER_ENV_FILE": env_file}
+           "DATAHOOVER_ENV_FILE": env_file,
+           "DATAHOOVER_HOOVER_BIN": str(stub / "hoover"),
+           "DATAHOOVER_REPORT_DIR": str(stub.parent / "snapshots")}
     env.update(extra or {})
     r = subprocess.run(["bash", str(WEEKLY)], cwd=str(ROOT), env=env,
                        capture_output=True, text=True, timeout=180)
-    return (r.stdout or "") + (r.stderr or "")
+    out = (r.stdout or "") + (r.stderr or "")
+    assert _calls(stub).is_file(), "the stub hoover never ran -- a real binary may have\n" + out
+    assert "compute-signals" in _calls(stub).read_text(encoding="utf-8"), \
+        "the stub did not see the whole pipeline\n" + out
+    return out
 
 
 @pytest.fixture
@@ -36,9 +52,34 @@ def stub(tmp_path: Path) -> Path:
     d = tmp_path / "bin"
     d.mkdir()
     h = d / "hoover"
-    h.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    h.write_text(f'#!/usr/bin/env bash\necho "$*" >> "{_calls(d)}"\nexit 0\n',
+                 encoding="utf-8")
     h.chmod(0o755)
     return d
+
+
+def test_the_pinned_stub_beats_a_hoover_earlier_on_PATH(stub, tmp_path: Path) -> None:
+    """Regression for CW-208: a real hoover ahead of the stub on PATH (which is
+    what .venv activation produces) must not be the one that runs."""
+    decoy_dir = tmp_path / "venv-bin"
+    decoy_dir.mkdir()
+    decoy_log = tmp_path / "decoy-calls.log"
+    decoy = decoy_dir / "hoover"
+    decoy.write_text(f'#!/usr/bin/env bash\necho "$*" >> "{decoy_log}"\nexit 0\n',
+                     encoding="utf-8")
+    decoy.chmod(0o755)
+    _run("/nonexistent/nope.env", stub, {"PATH": f"{decoy_dir}:{stub}:/usr/bin:/bin"})
+    assert not decoy_log.exists(), "the hoover found on PATH ran instead of the pinned stub"
+
+
+def test_an_unusable_hoover_override_fails_instead_of_falling_back(tmp_path: Path) -> None:
+    env = {"HOME": os.environ.get("HOME", "/tmp"), "PATH": "/usr/bin:/bin",
+           "DATAHOOVER_HOOVER_BIN": str(tmp_path / "missing-hoover"),
+           "DATAHOOVER_REPORT_DIR": str(tmp_path / "snapshots")}
+    r = subprocess.run(["bash", str(PIPELINE)], cwd=str(ROOT), env=env,
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 2
+    assert "is not an executable file" in r.stderr
 
 
 def test_run_weekly_honours_the_env_file_variable_the_unit_sets() -> None:
