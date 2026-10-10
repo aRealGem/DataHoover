@@ -33,6 +33,8 @@ from .connectors.stocktwits_symbol import ingest_stocktwits_symbol_stream
 from .connectors.generic_rss import ingest_generic_rss
 from .connectors.fiscal_fred_csv import ingest_fiscal_fred_csv
 from .connectors.fiscal_treasury import ingest_fiscal_treasury
+from .connectors.federal_register import ingest_federal_register
+from .connectors.usitc_hts import ingest_usitc_hts
 from .storage.duckdb_store import show_latest
 from .signals import compute_signals, alert_signals
 from .snapshot import snapshot_zip, snapshot_parquet, default_snapshot_stamp
@@ -261,6 +263,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_derive_fiscal.add_argument(
         "--show-alerts", action="store_true", help="Print the L3 alert state table after deriving"
     )
+
+    p_fr = sub.add_parser("ingest-federal-register", help="Ingest Federal Register public-inspection + published document metadata")
+    p_fr.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
+    p_fr.add_argument("--source", type=str, default="federal_register_policy", help="Source name from sources.toml")
+    p_fr.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
+    p_fr.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+
+    p_hts = sub.add_parser("ingest-usitc-hts", help="Snapshot + diff the latest two USITC HTS editions")
+    p_hts.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sources.toml")
+    p_hts.add_argument("--source", type=str, default="usitc_hts_editions", help="Source name from sources.toml")
+    p_hts.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
+    p_hts.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
 
     p_signals = sub.add_parser("compute-signals", help="Compute derived signals from ingested data")
     p_signals.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
@@ -653,6 +667,24 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[fiscal] {transition.format()}")
         if args.show_alerts:
             print(format_state_table(states))
+        return 0
+
+    if args.cmd == "ingest-federal-register":
+        ingest_federal_register(
+            config_path=args.config,
+            source_name=args.source,
+            data_dir=args.data_dir,
+            db_path=args.db,
+        )
+        return 0
+
+    if args.cmd == "ingest-usitc-hts":
+        ingest_usitc_hts(
+            config_path=args.config,
+            source_name=args.source,
+            data_dir=args.data_dir,
+            db_path=args.db,
+        )
         return 0
 
     if args.cmd == "compute-signals":

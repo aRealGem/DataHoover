@@ -1,0 +1,139 @@
+{
+ "count": 3,
+ "special_filings_updated_at": "2026-10-09T16:15:00.000-04:00",
+ "regular_filings_updated_at": "2026-10-09T08:45:00.000-04:00",
+ "results": [
+  {
+   "agencies": [
+    {
+     "raw_name": "Federal Aviation Administration",
+     "name": "Federal Aviation Administration",
+     "id": 159,
+     "url": "https://www.federalregister.gov/agencies/federal-aviation-administration",
+     "json_url": "https://www.federalregister.gov/api/v1/agencies/159",
+     "parent_id": 492,
+     "slug": "federal-aviation-administration"
+    }
+   ],
+   "agency_letters": [],
+   "agency_names": [
+    "Federal Aviation Administration"
+   ],
+   "docket_numbers": [],
+   "document_number": "2026-20818",
+   "editorial_note": null,
+   "excerpts": null,
+   "filed_at": "2026-10-08T11:15:00.000-04:00",
+   "filing_type": "special",
+   "html_url": "https://www.federalregister.gov/public-inspection/2026-20818/airworthiness-directives-elixir-aircraft",
+   "json_url": "https://www.federalregister.gov/api/v1/public_inspection_documents/2026-20818",
+   "last_public_inspection_issue": "2026-10-09",
+   "num_pages": 9,
+   "page_views": {
+    "count": 28,
+    "last_updated": "2026-10-09 18:15:10 -0400"
+   },
+   "pdf_file_name": "2026-20818_PI.pdf",
+   "pdf_file_size": 104074,
+   "pdf_updated_at": "2026-10-08T11:15:14.000-04:00",
+   "pdf_url": "https://public-inspection.federalregister.gov/2026-20818.pdf",
+   "publication_date": "2026-10-13",
+   "raw_text_url": "https://www.federalregister.gov/public-inspection/raw_text/202/620/818.txt",
+   "subject_1": "Airworthiness Directives:",
+   "subject_2": "Elixir Aircraft",
+   "subject_3": null,
+   "title": "Airworthiness Directives: Elixir Aircraft ",
+   "toc_doc": "Elixir Aircraft",
+   "toc_subject": "Airworthiness Directives:",
+   "type": "Rule"
+  },
+  {
+   "agencies": [
+    {
+     "raw_name": "Army Department",
+     "name": "Army Department",
+     "id": 32,
+     "url": "https://www.federalregister.gov/agencies/army-department",
+     "json_url": "https://www.federalregister.gov/api/v1/agencies/32",
+     "parent_id": 103,
+     "slug": "army-department"
+    }
+   ],
+   "agency_letters": [],
+   "agency_names": [
+    "Army Department"
+   ],
+   "docket_numbers": [],
+   "document_number": "2026-20785",
+   "editorial_note": null,
+   "excerpts": null,
+   "filed_at": "2026-10-09T08:45:00.000-04:00",
+   "filing_type": "regular",
+   "html_url": "https://www.federalregister.gov/public-inspection/2026-20785/licenses-exemptions-applications-amendments-etc-zyltech-engineering-llc-houston-tx",
+   "json_url": "https://www.federalregister.gov/api/v1/public_inspection_documents/2026-20785",
+   "last_public_inspection_issue": "2026-10-09",
+   "num_pages": 3,
+   "page_views": {
+    "count": 7,
+    "last_updated": "2026-10-09 18:15:10 -0400"
+   },
+   "pdf_file_name": "2026-20785_PI.pdf",
+   "pdf_file_size": 98515,
+   "pdf_updated_at": "2026-10-09T08:45:09.000-04:00",
+   "pdf_url": "https://public-inspection.federalregister.gov/2026-20785.pdf",
+   "publication_date": "2026-10-13",
+   "raw_text_url": "https://www.federalregister.gov/public-inspection/raw_text/202/620/785.txt",
+   "subject_1": "Licenses; Exemptions, Applications, Amendments, etc.:",
+   "subject_2": "Zyltech Engineering, LLC; Houston, TX",
+   "subject_3": null,
+   "title": "Licenses; Exemptions, Applications, Amendments, etc.: Zyltech Engineering, LLC; Houston, TX ",
+   "toc_doc": "Zyltech Engineering, LLC; Houston, TX",
+   "toc_subject": "Licenses; Exemptions, Applications, Amendments, etc.:",
+   "type": "Notice"
+  },
+  {
+   "agencies": [
+    {
+     "raw_name": "National Oceanic and Atmospheric Administration",
+     "name": "National Oceanic and Atmospheric Administration",
+     "id": 361,
+     "url": "https://www.federalregister.gov/agencies/national-oceanic-and-atmospheric-administration",
+     "json_url": "https://www.federalregister.gov/api/v1/agencies/361",
+     "parent_id": 54,
+     "slug": "national-oceanic-and-atmospheric-administration"
+    }
+   ],
+   "agency_letters": [],
+   "agency_names": [
+    "National Oceanic and Atmospheric Administration"
+   ],
+   "docket_numbers": [],
+   "document_number": "2026-20789",
+   "editorial_note": null,
+   "excerpts": null,
+   "filed_at": "2026-10-09T08:45:00.000-04:00",
+   "filing_type": "regular",
+   "html_url": "https://www.federalregister.gov/public-inspection/2026-20789/taking-or-importing-of-marine-mammals-city-and-borough-of-juneaus-seawalk-extension-project-juneau",
+   "json_url": "https://www.federalregister.gov/api/v1/public_inspection_documents/2026-20789",
+   "last_public_inspection_issue": "2026-10-09",
+   "num_pages": 81,
+   "page_views": {
+    "count": 15,
+    "last_updated": "2026-10-09 18:15:10 -0400"
+   },
+   "pdf_file_name": "2026-20789_PI.pdf",
+   "pdf_file_size": 502630,
+   "pdf_updated_at": "2026-10-09T08:45:10.000-04:00",
+   "pdf_url": "https://public-inspection.federalregister.gov/2026-20789.pdf",
+   "publication_date": "2026-10-13",
+   "raw_text_url": "https://www.federalregister.gov/public-inspection/raw_text/202/620/789.txt",
+   "subject_1": "Taking or Importing of Marine Mammals:",
+   "subject_2": "City and Borough of Juneau's Seawalk Extension Project, Juneau, AK",
+   "subject_3": null,
+   "title": "Taking or Importing of Marine Mammals: City and Borough of Juneau's Seawalk Extension Project, Juneau, AK ",
+   "toc_doc": "City and Borough of Juneau's Seawalk Extension Project, Juneau, AK",
+   "toc_subject": "Taking or Importing of Marine Mammals:",
+   "type": "Notice"
+  }
+ ]
+}
