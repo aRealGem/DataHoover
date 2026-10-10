@@ -372,6 +372,8 @@ overlap_days = 3
 max_window_days = 14
 per_page = 1000
 request_spacing_s = 0.5
+max_bytes_per_request = 16777216  # 16 MiB; a day-page is ~150 KB
+max_bytes_per_run = 67108864      # 64 MiB; a 7-day first run is ~3.3 MB
 
 [[sources]]
 name = "usitc_hts_editions"
@@ -382,6 +384,9 @@ license = "PD-USGov"
 redistribute = "public-domain"
 purpose = "raw_only"
 max_editions = 2
+max_bytes_per_request = 41943040  # 40 MiB; one edition JSON is ~12.7 MB
+max_bytes_per_run = 67108864      # 64 MiB; first run is ~25.4 MB
+status_note = "COVERAGE: line-level only; note-based policy changes, including Chapter 99 U.S. notes, NOT covered. An edition whose JSON is byte-identical to the previous one is recorded as hts_editions.identical_to_previous = true (2026HTSRev21 vs Rev20 was, on 2026-10-09); an empty diff then means no line-level change, not no policy change."
 
 # --------------------------------------------------------------------------- #
 # Signal producer thresholds. Keys not present here fall back to the defaults

@@ -37,6 +37,7 @@ from ._provenance import (
     utc_now,
     write_immutable,
 )
+from ._capped_http import ByteBudget, DownloadCapExceeded, capped_get
 from ._retry import fetch_with_retry
 
 API = "https://www.federalregister.gov/api/v1"
@@ -45,6 +46,10 @@ DOC_ENDPOINT = f"{API}/documents.json"
 EASTERN = ZoneInfo("America/New_York")
 MATCH_CAP = 2000
 DOC_TYPES = ["RULE", "PRORULE", "NOTICE", "PRESDOCU"]
+# Client-side download ceilings (AB-003). Observed: ~150 KB per day-page, 3.3 MB
+# for a 7-day first run. Override per source with max_bytes_per_request/_run.
+DEFAULT_MAX_BYTES_PER_REQUEST = 16 * 1024 * 1024
+DEFAULT_MAX_BYTES_PER_RUN = 64 * 1024 * 1024
 
 DOC_FIELDS = [
     "document_number", "publication_date", "effective_on", "type", "subtype", "title",
@@ -68,12 +73,13 @@ PI_VOLATILE = {"page_views"}
 HttpGet = Callable[[str, Optional[List[Tuple[str, str]]]], Tuple[int, bytes]]
 
 
-def _default_http_get(timeout_s: float = 60.0) -> HttpGet:
+def _default_http_get(budget: ByteBudget, timeout_s: float = 60.0,
+                      transport: Optional[httpx.BaseTransport] = None) -> HttpGet:
     def _get(url: str, params: Optional[List[Tuple[str, str]]]) -> Tuple[int, bytes]:
-        with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
-            r = client.get(url, params=params, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
-        r.raise_for_status()
-        return r.status_code, r.content
+        with httpx.Client(timeout=timeout_s, follow_redirects=True, transport=transport) as client:
+            status, _, body = capped_get(client, url, budget, params=params,
+                                         headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+        return status, body
     return _get
 
 
@@ -305,6 +311,7 @@ def ingest_federal_register(
     now: Optional[datetime] = None,
     start: Optional[date] = None,
     end: Optional[date] = None,
+    transport: Optional[httpx.BaseTransport] = None,
 ) -> Dict[str, Any]:
     """Ingest PI + published metadata for a bounded day window. Returns a summary dict."""
     from ..storage.duckdb_store import init_db, log_run
@@ -320,6 +327,8 @@ def ingest_federal_register(
     max_window_days = int(cfg.get("max_window_days", 14))
     per_page = int(cfg.get("per_page", 1000))
     spacing = float(cfg.get("request_spacing_s", 0.5))
+    budget = ByteBudget(per_request=int(cfg.get("max_bytes_per_request", DEFAULT_MAX_BYTES_PER_REQUEST)),
+                        per_run=int(cfg.get("max_bytes_per_run", DEFAULT_MAX_BYTES_PER_RUN)))
 
     state_file = _state_path(data_dir, src.name)
     state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
@@ -336,7 +345,7 @@ def ingest_federal_register(
     started = datetime.now(timezone.utc)
     run_id = str(uuid.uuid4())
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ") + "_" + run_id[:8]
-    fx = _Fetcher(http_get=http_get or _default_http_get(), data_dir=data_dir, db_path=db_path,
+    fx = _Fetcher(http_get=http_get or _default_http_get(budget, transport=transport), data_dir=data_dir, db_path=db_path,
                   source_name=src.name, spacing_s=spacing, run_stamp=stamp)
     drift: set = set()
     try:

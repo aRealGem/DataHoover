@@ -418,6 +418,12 @@ These have connectors and tables in [`duckdb_store.py`](../src/datahoover/storag
 
 The Tier 1 sentiment-index sources land in dedicated DuckDB tables (`alternative_me_fng`, `cnn_fear_greed`) and a shared `fred_series_observations` table. They are pre-computed sentiment scores (0–100), so a future `_sentiment_regime_signals` producer can fire on threshold crossings (Greed → Fear, etc.) without any NLP work. See [`docs/licensing.md`](licensing.md) for the redistribution lane each source falls into.
 
+### Policy sources (DH-PULLS-001): what they do and do not cover
+
+`federal_register_policy` (public-inspection + published-document metadata, no full text) and `usitc_hts_editions` (the latest two HTS editions plus a line-level diff) are raw-only, with no signal producer. Both are bounded by client-side download caps (`max_bytes_per_request`, `max_bytes_per_run` in `sources.toml`, enforced in [`_capped_http.py`](../src/datahoover/connectors/_capped_http.py)): each response is streamed and aborted the moment it passes a ceiling, no `Range` header is sent, and the run fails loudly.
+
+**HTS coverage is line-level only.** Note-based policy changes, including the Chapter 99 U.S. notes, are NOT covered. When an edition's JSON is byte-identical to the previous edition (as 2026HTSRev21 was to Rev20), `hts_editions.identical_to_previous` is TRUE and the run log says so. An empty diff means "no line-level change", not "no policy change"; for legal timing follow `modification_sources` to the Federal Register record.
+
 ### Catalog split
 
 Catalog sources describe dataset-search endpoints (CKAN `package_search`, Socrata SODA discovery, Opendatasoft Explore catalog) rather than substantive data feeds. They live in `catalogs.toml`; [`load_sources`](../src/datahoover/sources.py) transparently merges any sibling `catalogs.toml` at load time, so `hoover ingest-ckan` / `ingest-socrata` / `ingest-opendatasoft` keep finding the same names without any new CLI surface.

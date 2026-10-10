@@ -18,6 +18,13 @@ Per edition:
 
 A silent USITC re-post of the same edition with different bytes is kept as a
 second snapshot of that edition, never an overwrite.
+
+COVERAGE (AB-003): this is line-level ingestion of the HTS JSON only. Policy
+changes made through the HTS notes -- including the Chapter 99 U.S. notes that
+carry many Section 232/301-style measures -- are NOT in that JSON and are NOT
+covered. When an edition's JSON is byte-identical to the one before it,
+``hts_editions.identical_to_previous`` is TRUE and the run log says so: an
+empty diff then means "no line-level change", never "no policy change".
 """
 from __future__ import annotations
 
@@ -35,10 +42,13 @@ import httpx
 
 from ..sources import load_sources
 from ._provenance import USER_AGENT, content_hash, sha256_bytes, utc_now, write_immutable
+from ._capped_http import ByteBudget, DownloadCapExceeded, capped_get
 from ._retry import fetch_with_retry
 
 BASE = "https://www.usitc.gov"
 EFFECTIVE_UNKNOWN = "unknown_not_stated_by_source"
+COVERAGE_NOTE = ("line-level only; note-based policy changes, including Chapter 99 U.S. notes, "
+                 "NOT covered")
 LINE_FIELDS = ["htsno", "indent", "description", "units", "general", "special", "other",
                "footnotes", "quotaQuantity", "additionalDuties"]
 
@@ -46,14 +56,17 @@ LINE_FIELDS = ["htsno", "indent", "description", "units", "general", "special", 
 HttpGet = Callable[[str, Dict[str, str]], Tuple[int, Dict[str, str], bytes]]
 
 
-def _default_http_get(timeout_s: float = 120.0) -> HttpGet:
+# Client-side download ceilings (AB-003). Observed: one edition JSON ~12.7 MB,
+# archive page ~0.1 MB, first run 25.4 MB. Override with max_bytes_per_request/_run.
+DEFAULT_MAX_BYTES_PER_REQUEST = 40 * 1024 * 1024
+DEFAULT_MAX_BYTES_PER_RUN = 64 * 1024 * 1024
+
+
+def _default_http_get(budget: ByteBudget, timeout_s: float = 120.0,
+                      transport: Optional[httpx.BaseTransport] = None) -> HttpGet:
     def _get(url: str, extra: Dict[str, str]) -> Tuple[int, Dict[str, str], bytes]:
-        with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
-            r = client.get(url, headers={"User-Agent": USER_AGENT, **extra})
-        if r.status_code == 304:
-            return 304, dict(r.headers), b""
-        r.raise_for_status()
-        return r.status_code, dict(r.headers), r.content
+        with httpx.Client(timeout=timeout_s, follow_redirects=True, transport=transport) as client:
+            return capped_get(client, url, budget, headers={"User-Agent": USER_AGENT, **extra})
     return _get
 
 
@@ -218,6 +231,7 @@ def ingest_usitc_hts(
     data_dir: Path,
     db_path: Path,
     http_get: Optional[HttpGet] = None,
+    transport: Optional[httpx.BaseTransport] = None,
 ) -> Dict[str, Any]:
     from ..storage.duckdb_store import init_db, log_run
     from ..storage.policy_store import init_policy_tables, record_raw_response
@@ -229,7 +243,9 @@ def ingest_usitc_hts(
     n_editions = int((src.extra or {}).get("max_editions", 2))
     if n_editions > 2:
         raise SystemExit("usitc_hts: max_editions > 2 is a historical pull; not authorized (DH-PULLS-001)")
-    get = http_get or _default_http_get()
+    budget = ByteBudget(per_request=int((src.extra or {}).get("max_bytes_per_request", DEFAULT_MAX_BYTES_PER_REQUEST)),
+                        per_run=int((src.extra or {}).get("max_bytes_per_run", DEFAULT_MAX_BYTES_PER_RUN)))
+    get = http_get or _default_http_get(budget, transport=transport)
     raw_dir = data_dir / "raw" / src.name
     state_file = _state_path(data_dir, src.name)
     state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
@@ -305,16 +321,27 @@ def ingest_usitc_hts(
                             [[r[c] for c in cols] for r in rows])
                 prev = con.execute("SELECT first_seen_at FROM hts_editions WHERE edition_name = ?", [name]).fetchone()
                 con.execute(
-                    "INSERT OR REPLACE INTO hts_editions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT OR REPLACE INTO hts_editions (edition_name, edition_label, archive_published_date_raw, "
+                    "archive_published_date, release_date_raw, release_date, effective_date, effective_date_status, "
+                    "modification_sources, json_url, current_snapshot_sha256, first_seen_at, last_seen_at, "
+                    "identical_to_previous, previous_edition_name, coverage_note) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [name, ed["edition_label"], ed["archive_published_date_raw"], ed["archive_published_date"],
                      ed["release_date_raw"], ed["release_date"], None, EFFECTIVE_UNKNOWN,
                      json.dumps(ed["modification_sources"], ensure_ascii=False) if ed["modification_sources"] else None, url, sha,
-                     prev[0] if prev else seen_at, seen_at])
+                     prev[0] if prev else seen_at, seen_at, None, None, COVERAGE_NOTE])
 
             newer, older = editions[0]["edition_name"], editions[1]["edition_name"] if len(editions) > 1 else None
             n_diff = 0
+            identical = None
             if older:
                 (sha_o, lines_o), (sha_n, lines_n) = snaps[older], snaps[newer]
+                identical = sha_o == sha_n
+                con.execute("UPDATE hts_editions SET identical_to_previous = ?, previous_edition_name = ? "
+                            "WHERE edition_name = ?", [identical, older, newer])
+                if identical:
+                    print(f"[{src.name}] WARNING identical_to_previous=true: {newer} JSON is byte-identical to "
+                          f"{older} (sha256 {sha_n[:16]}); line-level diff is empty. {COVERAGE_NOTE}.")
                 done = con.execute("SELECT COUNT(*) FROM hts_edition_diffs WHERE from_snapshot_sha256 = ? AND to_snapshot_sha256 = ?",
                                    [sha_o, sha_n]).fetchone()[0]
                 diffs = diff_lines(lines_o, lines_n)
@@ -337,13 +364,16 @@ def ingest_usitc_hts(
         state_file.write_text(json.dumps(state, indent=2, sort_keys=True, default=str), encoding="utf-8")
         msg = (f"editions={[e['edition_name'] for e in editions]} req={n_req} bytes={n_bytes} "
                f"lines={{{', '.join(f'{k}: {len(v[1])}' for k, v in snaps.items())}}} diff_rows={n_diff}"
+               + f" identical_to_previous={'unknown' if identical is None else str(identical).lower()}"
+               + f" coverage={COVERAGE_NOTE!r}"
                + (f" drift={drift}" if drift else ""))
         log_run(db_path, run_id=run_id, source=src.name, feed_url=src.url, started_at=started,
                 ended_at=datetime.now(timezone.utc), status="ok" if not drift else "ok_drift",
                 n_total=sum(len(v[1]) for v in snaps.values()), n_new=n_diff, message=msg)
         print(f"[{src.name}] {msg}")
         return {"editions": editions, "requests": n_req, "bytes": n_bytes, "diff_rows": n_diff,
-                "lines": {k: len(v[1]) for k, v in snaps.items()}, "schema_drift": drift}
+                "lines": {k: len(v[1]) for k, v in snaps.items()}, "schema_drift": drift,
+                "identical_to_previous": identical, "coverage_note": COVERAGE_NOTE}
     except Exception as e:
         try:
             log_run(db_path, run_id=run_id, source=src.name, feed_url=src.url, started_at=started,

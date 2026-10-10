@@ -178,3 +178,48 @@ def test_layout_drift_with_no_editions_fails_loudly(env):
             return 200, {}, b"<html><body>redesigned</body></html>"
     with pytest.raises(RuntimeError, match="usable editions"):
         _run(env, Blank())
+
+
+def test_identical_edition_json_is_recorded_and_logged(env, capsys):
+    same = json.dumps(OLD).encode()
+    out = _run(env, FakeUSITC(bodies={J21: same, J20: same}))
+    db = env[2]
+    assert out["diff_rows"] == 0 and out["identical_to_previous"] is True
+    assert out["coverage_note"] == hts.COVERAGE_NOTE
+    rows = dict((r[0], r[1:]) for r in _q(db, "SELECT edition_name, identical_to_previous, previous_edition_name, "
+                                              "coverage_note FROM hts_editions"))
+    assert rows["2026HTSRev21"] == (True, "2026HTSRev20", hts.COVERAGE_NOTE)
+    assert rows["2026HTSRev20"][:2] == (None, None)  # its predecessor was not fetched: unknown, not False
+    msg = _q(db, "SELECT message FROM ingest_runs")[0][0]
+    assert "identical_to_previous=true" in msg and "Chapter 99" in msg
+    assert "WARNING identical_to_previous=true" in capsys.readouterr().out
+
+
+def test_different_edition_json_is_recorded_as_not_identical(env):
+    out = _run(env, FakeUSITC())
+    assert out["identical_to_previous"] is False
+    assert _q(env[2], "SELECT identical_to_previous FROM hts_editions WHERE edition_name = '2026HTSRev21'") == [(False,)]
+    assert "identical_to_previous=false" in _q(env[2], "SELECT message FROM ingest_runs")[0][0]
+
+
+def test_coverage_note_is_in_sources_toml_status_note():
+    from datahoover.sources import load_sources
+    src = load_sources(Path(__file__).parents[1] / "sources.toml")["usitc_hts_editions"]
+    note = (src.extra or {}).get("status_note") or getattr(src, "status_note", None) or ""
+    assert hts.COVERAGE_NOTE in note
+
+
+def test_pre_ab003_hts_editions_table_gains_the_new_columns(env):
+    from datahoover.storage.policy_store import init_policy_tables
+    db = env[2]
+    db.parent.mkdir(parents=True)
+    con = duckdb.connect(str(db))
+    con.execute("CREATE TABLE hts_editions (edition_name VARCHAR PRIMARY KEY, edition_label VARCHAR, "
+                "archive_published_date_raw VARCHAR, archive_published_date DATE, release_date_raw VARCHAR, "
+                "release_date DATE, effective_date DATE, effective_date_status VARCHAR, modification_sources VARCHAR, "
+                "json_url VARCHAR, current_snapshot_sha256 VARCHAR, first_seen_at TIMESTAMP, last_seen_at TIMESTAMP)")
+    con.close()
+    init_policy_tables(db)
+    cols = {r[0] for r in _q(db, "SELECT column_name FROM information_schema.columns WHERE table_name = 'hts_editions'")}
+    assert {"identical_to_previous", "previous_edition_name", "coverage_note"} <= cols
+    _run(env, FakeUSITC())  # and the ingest works on the migrated table

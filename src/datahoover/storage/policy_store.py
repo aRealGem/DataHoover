@@ -164,9 +164,19 @@ _DDL = [
         json_url VARCHAR,
         current_snapshot_sha256 VARCHAR,
         first_seen_at TIMESTAMP,
-        last_seen_at TIMESTAMP
+        last_seen_at TIMESTAMP,
+        -- TRUE when this edition's JSON is byte-identical to the edition before
+        -- it (the line-level diff is then empty even if USITC changed notes);
+        -- NULL when the previous edition was not fetched in the same run.
+        identical_to_previous BOOLEAN,
+        previous_edition_name VARCHAR,
+        coverage_note VARCHAR
     )
     """,
+    # Tables created before AB-003 lack these columns.
+    "ALTER TABLE hts_editions ADD COLUMN IF NOT EXISTS identical_to_previous BOOLEAN",
+    "ALTER TABLE hts_editions ADD COLUMN IF NOT EXISTS previous_edition_name VARCHAR",
+    "ALTER TABLE hts_editions ADD COLUMN IF NOT EXISTS coverage_note VARCHAR",
     """
     CREATE TABLE IF NOT EXISTS hts_snapshots (
         snapshot_sha256 VARCHAR PRIMARY KEY,
