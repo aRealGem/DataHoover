@@ -117,6 +117,11 @@ run_ingest "ingest-fred-macro" ingest-fred --source fred_macro_watchlist
 run_ingest "ingest-fred-crypto" ingest-fred --source fred_crypto_fx
 run_ingest "ingest-bls" ingest-bls --source bls_truthbot_watchlist
 run_ingest "ingest-census" ingest-census --source census_acs_state_basic
+# DH-PULLS-001 policy sources: keyless, metadata/snapshots only, bounded in
+# the connectors themselves (FR: <=14-day window; HTS: latest 2 editions,
+# conditional GET so an unchanged edition downloads nothing).
+run_ingest "ingest-federal-register" ingest-federal-register --source federal_register_policy
+run_ingest "ingest-usitc-hts" ingest-usitc-hts --source usitc_hts_editions
 
 echo "--- compute-signals ---"
 set +e
