@@ -36,3 +36,4 @@ data-hoover.zip
 
 # Canvas dev deps (installed only in the Cursor projects dir)
 canvases/node_modules/
+scratch/

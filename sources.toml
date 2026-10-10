@@ -355,6 +355,40 @@ redistribute = "public-domain"
 page_size = 1000
 
 # --------------------------------------------------------------------------- #
+# Policy sources (DH-PULLS-001, 2026-10). Metadata/snapshots only, keyless,
+# bounded. See docs/policy-sources.md for the clocks each one keeps apart.
+# --------------------------------------------------------------------------- #
+
+[[sources]]
+name = "federal_register_policy"
+kind = "federal_register"
+url = "https://www.federalregister.gov/api/v1"
+description = "Federal Register public-inspection and published-document METADATA (no full text). First run: last 7 Eastern days; then incremental by publication date with a 3-day overlap, clamped to 14 days. One query per day, split by type if a day nears the API's 2,000-match cap. PI and published records link by document_number."
+license = "PD-USGov"
+redistribute = "public-domain"
+purpose = "raw_only"
+initial_days = 7
+overlap_days = 3
+max_window_days = 14
+per_page = 1000
+request_spacing_s = 0.5
+max_bytes_per_request = 16777216  # 16 MiB; a day-page is ~150 KB
+max_bytes_per_run = 67108864      # 64 MiB; a 7-day first run is ~3.3 MB
+
+[[sources]]
+name = "usitc_hts_editions"
+kind = "usitc_hts"
+url = "https://www.usitc.gov/harmonized_tariff_information/hts/archive/list"
+description = "USITC Harmonized Tariff Schedule: immutable JSON snapshot (sha256) of the latest and the immediately preceding edition only, plus a line-level diff between them. Edition publication date is NOT a legal effective date; effective_date stays NULL with a status flag unless USITC states one."
+license = "PD-USGov"
+redistribute = "public-domain"
+purpose = "raw_only"
+max_editions = 2
+max_bytes_per_request = 41943040  # 40 MiB; one edition JSON is ~12.7 MB
+max_bytes_per_run = 67108864      # 64 MiB; first run is ~25.4 MB
+status_note = "COVERAGE: line-level only; note-based policy changes, including Chapter 99 U.S. notes, NOT covered. An edition whose JSON is byte-identical to the previous one is recorded as hts_editions.identical_to_previous = true (2026HTSRev21 vs Rev20 was, on 2026-10-09); an empty diff then means no line-level change, not no policy change."
+
+# --------------------------------------------------------------------------- #
 # Signal producer thresholds. Keys not present here fall back to the defaults
 # in `SIGNAL_THRESHOLD_DEFAULTS` in `src/datahoover/sources.py`.
 # --------------------------------------------------------------------------- #
