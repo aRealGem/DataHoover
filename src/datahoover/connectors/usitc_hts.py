@@ -224,6 +224,21 @@ def _state_path(data_dir: Path, name: str) -> Path:
     return data_dir / "state" / f"{name}.json"
 
 
+def _editions_unchanged(state: Dict[str, Any], editions: List[Dict[str, Any]]) -> bool:
+    """True when the selected editions match the last successful run and every
+    local snapshot is present and still hashes to its recorded sha256."""
+    if state.get("editions") != [e["edition_name"] for e in editions]:
+        return False
+    for ed in editions:
+        cond = state.get("http", {}).get(ed["json_url"]) or {}
+        path = Path(cond["raw_path"]) if cond.get("raw_path") else None
+        if not cond.get("sha256") or path is None or not path.is_file():
+            return False
+        if sha256_bytes(path.read_bytes()) != cond["sha256"]:
+            return False
+    return True
+
+
 def ingest_usitc_hts(
     *,
     config_path: Path,
@@ -232,7 +247,18 @@ def ingest_usitc_hts(
     db_path: Path,
     http_get: Optional[HttpGet] = None,
     transport: Optional[httpx.BaseTransport] = None,
+    skip_unchanged: bool = False,
 ) -> Dict[str, Any]:
+    """Snapshot + diff the latest two editions.
+
+    ``skip_unchanged`` (the daily job, DH-PULLS-001-AB-005): after the archive
+    page, stop if the latest editions are the same names and JSON URLs as the
+    last successful run and their local snapshots still match the recorded
+    sha256. No edition GET is made at all, so an unchanged edition is never
+    redownloaded even though USITC sends no ETag and has not been shown to
+    honour If-Modified-Since. A same-name silent repost is left to the weekly
+    run, which always makes the conditional GET.
+    """
     from ..storage.duckdb_store import init_db, log_run
     from ..storage.policy_store import init_policy_tables, record_raw_response
 
@@ -270,6 +296,17 @@ def ingest_usitc_hts(
         editions = select_editions(parse_archive_page(body.decode("utf-8", errors="replace")), n_editions)
         if len(editions) < n_editions:
             raise RuntimeError(f"archive page yielded {len(editions)} usable editions; expected {n_editions} (page layout drift?)")
+
+        if skip_unchanged and _editions_unchanged(state, editions):
+            names = [e["edition_name"] for e in editions]
+            msg = (f"editions={names} unchanged since {state.get('last_success_at')}; "
+                   f"edition GETs skipped req={n_req} bytes={n_bytes}")
+            log_run(db_path, run_id=run_id, source=src.name, feed_url=src.url, started_at=started,
+                    ended_at=datetime.now(timezone.utc), status="ok_unchanged", n_total=0, n_new=0, message=msg)
+            print(f"[{src.name}] {msg}")
+            return {"editions": editions, "requests": n_req, "bytes": n_bytes, "diff_rows": 0,
+                    "lines": {}, "schema_drift": [], "identical_to_previous": None,
+                    "coverage_note": COVERAGE_NOTE, "skipped_unchanged": True}
 
         seen_at = utc_now()
         snaps: Dict[str, Tuple[str, List[Dict[str, Any]]]] = {}

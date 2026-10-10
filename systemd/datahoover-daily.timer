@@ -1,0 +1,16 @@
+# Install: copy to ~/.config/systemd/user/, then enable --now. DH-PULLS-001-AB-005.
+[Unit]
+Description=Run DataHoover daily bounded policy ingest (18:30 New York)
+
+[Timer]
+# 18:30 Eastern: after the Federal Register's 16:15 special public-inspection
+# filings, and nowhere near the Saturday 08:00 weekly run. The warehouse lock
+# covers any overlap anyway.
+OnCalendar=*-*-* 18:30:00 America/New_York
+RandomizedDelaySec=300
+# false on purpose: no boot or clock-jump catch-up storm. A missed day is
+# picked up by the FR 3-day overlap on the next fire.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

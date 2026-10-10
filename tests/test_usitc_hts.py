@@ -223,3 +223,60 @@ def test_pre_ab003_hts_editions_table_gains_the_new_columns(env):
     cols = {r[0] for r in _q(db, "SELECT column_name FROM information_schema.columns WHERE table_name = 'hts_editions'")}
     assert {"identical_to_previous", "previous_edition_name", "coverage_note"} <= cols
     _run(env, FakeUSITC())  # and the ingest works on the migrated table
+
+
+# --- daily --skip-unchanged (DH-PULLS-001-AB-005) --------------------------
+
+def _counts(db):
+    return {t: _q(db, f"SELECT COUNT(*) FROM {t}")[0][0]
+            for t in ("hts_snapshots", "hts_lines", "hts_edition_diffs", "hts_editions")}
+
+
+def _run_skip(env, fake):
+    cfg, data_dir, db = env
+    return hts.ingest_usitc_hts(config_path=cfg, source_name="usitc_hts_editions", data_dir=data_dir,
+                                db_path=db, http_get=fake, skip_unchanged=True)
+
+
+def test_skip_unchanged_makes_no_edition_request_and_adds_no_rows(env):
+    _run(env, FakeUSITC())
+    db = env[2]
+    before = _counts(db)
+    fake = FakeUSITC(honour_conditional=False)  # USITC sends no ETag; assume no 304 either
+    out = _run_skip(env, fake)
+    assert out["skipped_unchanged"] is True
+    assert [u for u, _ in fake.calls] == [URL]  # archive page only, zero edition downloads
+    assert out["bytes"] == len(PAGE)
+    assert _counts(db) == before
+    status = _q(db, "SELECT status, n_new FROM ingest_runs WHERE source = 'usitc_hts_editions' "
+                    "ORDER BY started_at DESC LIMIT 1")[0]
+    assert status == ("ok_unchanged", 0)
+
+
+def test_skip_unchanged_still_ingests_a_new_edition(env, monkeypatch):
+    _run(env, FakeUSITC())
+    page = PAGE.decode("utf-8")
+    monkeypatch.setattr(hts, "select_editions",
+                        lambda eds, n: [dict(eds[0], edition_name="2026HTSRev22"), eds[0]][:n])
+    fake = FakeUSITC(honour_conditional=False)
+    out = _run_skip(env, fake)
+    assert "skipped_unchanged" not in out
+    assert sum(1 for u, _ in fake.calls if u != URL) == 2
+    assert page  # fixture unchanged
+
+
+def test_skip_unchanged_refuses_to_trust_a_tampered_local_snapshot(env):
+    _run(env, FakeUSITC())
+    db = env[2]
+    path = Path(_q(db, "SELECT raw_path FROM hts_snapshots LIMIT 1")[0][0])
+    path.chmod(0o644)
+    path.write_bytes(b"[]")
+    fake = FakeUSITC(honour_conditional=False)
+    with pytest.raises(RuntimeError):  # falls through to the full path, which then refuses to overwrite
+        _run_skip(env, fake)
+    assert sum(1 for u, _ in fake.calls if u != URL) >= 1
+
+
+def test_first_run_with_skip_unchanged_is_a_normal_full_run(env):
+    out = _run_skip(env, FakeUSITC())
+    assert "skipped_unchanged" not in out and out["diff_rows"] == 3

@@ -275,3 +275,20 @@ def test_raw_files_are_never_overwritten(tmp_path):
     with pytest.raises(RuntimeError, match="refusing to overwrite"):
         write_immutable(p, b"two")
     assert p.read_bytes() == b"one"
+
+
+# --- daily cadence (DH-PULLS-001-AB-005) -----------------------------------
+
+def test_consecutive_daily_runs_use_state_window_and_add_zero_rows(env):
+    _run(env, FakeFR())
+    db = env[2]
+    tables = ("fr_public_inspection", "fr_public_inspection_versions", "fr_documents", "fr_documents_versions")
+    before = {t: _q(db, f"SELECT COUNT(*) FROM {t}")[0][0] for t in tables}
+    fake = FakeFR()
+    nxt = datetime(2026, 10, 11, 0, 0, tzinfo=timezone.utc)  # next Eastern day, 2026-10-10
+    out = fr.ingest_federal_register(config_path=env[0], source_name="federal_register_policy",
+                                     data_dir=env[1], db_path=db, http_get=fake, now=nxt)
+    assert out["window"] == ["2026-10-06", "2026-10-10"]  # through 10-09 minus 3-day overlap
+    assert out["public_inspection"]["inserted"] == 0 and out["public_inspection"]["revised"] == 0
+    assert out["documents"]["inserted"] == 0 and out["documents"]["revised"] == 0
+    assert {t: _q(db, f"SELECT COUNT(*) FROM {t}")[0][0] for t in tables} == before
