@@ -1,0 +1,17 @@
+# Install: copy to ~/.config/systemd/user/ (user unit, no sudo). DH-PULLS-001-AB-005.
+[Unit]
+Description=DataHoover daily bounded policy ingest (Federal Register + USITC HTS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/DataHoover
+# No EnvironmentFile: both daily sources are keyless, so no secret is loaded.
+ExecStart=%h/DataHoover/scripts/run-daily.sh
+StandardOutput=append:%h/DataHoover/data/logs/datahoover-daily.log
+StandardError=append:%h/DataHoover/data/logs/datahoover-daily.log
+# Two steps at 600 s each (+30 s kill grace) plus headroom = 21 min worst case;
+# measured runs should be well under a minute once state exists.
+TimeoutStartSec=1500
+Nice=10

@@ -275,6 +275,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_hts.add_argument("--source", type=str, default="usitc_hts_editions", help="Source name from sources.toml")
     p_hts.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Data directory (raw/state/db)")
     p_hts.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
+    p_hts.add_argument("--skip-unchanged", action="store_true",
+                       help="Skip edition downloads when the latest editions match the last run (daily job)")
 
     p_signals = sub.add_parser("compute-signals", help="Compute derived signals from ingested data")
     p_signals.add_argument("--db", type=Path, default=DEFAULT_DB, help="DuckDB database path")
@@ -684,6 +686,7 @@ def main(argv: list[str] | None = None) -> int:
             source_name=args.source,
             data_dir=args.data_dir,
             db_path=args.db,
+            skip_unchanged=args.skip_unchanged,
         )
         return 0
 

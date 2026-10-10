@@ -27,4 +27,20 @@ else
   echo "[env] WARNING: set DATAHOOVER_ENV_FILE or create the file. See ops:credentials."
 fi
 
+# Warehouse writer lock (DH-PULLS-001-AB-005), shared with run-daily.sh. The
+# weekly run WAITS for it (a daily run is bounded at ~21 min worst case) and
+# the daily run never waits, so the two never write data/warehouse.duckdb at
+# once. fd 9 stays open across the exec below, so the lock is held for the
+# whole pipeline and released when it exits. If the wait runs out, fail
+# loudly rather than start a second writer.
+LOCK_FILE="${DATAHOOVER_LOCK_FILE:-$ROOT/data/locks/warehouse.lock}"
+LOCK_WAIT_S="${DATAHOOVER_WEEKLY_LOCK_WAIT_S:-1800}"
+mkdir -p "$(dirname "$LOCK_FILE")"
+exec 9>"$LOCK_FILE"
+if ! flock -w "$LOCK_WAIT_S" 9; then
+  echo "[lock] ERROR: $LOCK_FILE still held after ${LOCK_WAIT_S}s; weekly run NOT started."
+  exit 75
+fi
+echo "[lock] acquired $LOCK_FILE"
+
 exec "$ROOT/scripts/run-full-pipeline.sh"

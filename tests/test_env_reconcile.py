@@ -36,7 +36,9 @@ def _run(env_file: str, stub: Path, extra: dict | None = None) -> str:
            "PATH": f"{stub}:/usr/bin:/bin",
            "DATAHOOVER_ENV_FILE": env_file,
            "DATAHOOVER_HOOVER_BIN": str(stub / "hoover"),
-           "DATAHOOVER_REPORT_DIR": str(stub.parent / "snapshots")}
+           "DATAHOOVER_REPORT_DIR": str(stub.parent / "snapshots"),
+           # keep the test off the live warehouse lock (DH-PULLS-001-AB-005)
+           "DATAHOOVER_LOCK_FILE": str(stub.parent / "locks" / "warehouse.lock")}
     env.update(extra or {})
     r = subprocess.run(["bash", str(WEEKLY)], cwd=str(ROOT), env=env,
                        capture_output=True, text=True, timeout=180)
