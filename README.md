@@ -1,5 +1,10 @@
 # Data Hoover (Local-first)
 
+<p align="center">
+  <img src="assets/branding/logo.svg" alt="DataHoover logo" width="480">
+</p>
+
+
 This repo ingests no-auth public feeds (USGS + Eurostat) and stores:
 - the raw response (`data/raw/...`)
 - a normalized table in a local **DuckDB** database (`data/warehouse.duckdb`)
@@ -87,3 +92,4 @@ If you have Docker installed, you can open this repo in a dev container using a 
 - Add another source (Eurostat Statistics API, NASA RSS, etc.)
 - Add scheduling (Prefect, cron, or later n8n)
 - Add provenance archiving (Wayback SavePageNow + local WARC) for claim-like pages
+
