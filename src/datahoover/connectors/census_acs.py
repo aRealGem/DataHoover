@@ -13,6 +13,7 @@ from ..env import get_secret
 from ..sources import load_sources, Source
 from ..storage.duckdb_store import init_db, log_run, upsert_census_observations
 from ._retry import fetch_with_retry
+from ..redact import raise_for_status
 
 USER_AGENT = "data-hoover/0.1 (+local-first; contact: you@example.com)"
 HTTP_TIMEOUT_S = 90.0
@@ -44,7 +45,7 @@ def _census_get_array_payload(
     headers = {"User-Agent": USER_AGENT}
     with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
         response = client.get(url, params=params, headers=headers)
-    response.raise_for_status()
+    raise_for_status(response)
     text = response.text.strip()
     if not text.startswith("["):
         raise ValueError(

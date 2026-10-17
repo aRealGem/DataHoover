@@ -13,6 +13,8 @@ from pathlib import Path
 import os
 from typing import Dict
 
+from .redact import register_secret
+
 _ENV_FILE_ENVVAR = "DATAHOOVER_ENV_FILE"
 
 
@@ -21,6 +23,7 @@ def get_secret(name: str) -> str | None:
 
     value = os.environ.get(name)
     if value:
+        register_secret(value)
         return value
 
     env_values = _load_env_file()
@@ -28,6 +31,7 @@ def get_secret(name: str) -> str | None:
         value = env_values[name]
         # Memoise into os.environ so downstream libraries can read it
         os.environ.setdefault(name, value)
+        register_secret(value)
         return value
     return None
 

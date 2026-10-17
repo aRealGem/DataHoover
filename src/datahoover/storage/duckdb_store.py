@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Dict, Any
 
+from ..redact import redact
+
 
 def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1833,7 +1835,19 @@ def log_run(
             """
             INSERT INTO ingest_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            [run_id, source, feed_url, started_at, ended_at, status, n_total, n_new, message],
+            # ingest_runs is exported in snapshots: mask any key that reached
+            # an exception message or a configured URL (see datahoover/redact.py).
+            [
+                run_id,
+                source,
+                redact(feed_url) if feed_url else feed_url,
+                started_at,
+                ended_at,
+                status,
+                n_total,
+                n_new,
+                redact(message) if message else message,
+            ],
         )
     finally:
         con.close()

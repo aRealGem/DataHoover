@@ -12,6 +12,7 @@ from ..env import get_secret
 from ..sources import load_sources, Source
 from ..storage.duckdb_store import init_db, log_run, upsert_fred_series_observations
 from ._retry import fetch_with_retry
+from ..redact import raise_for_status
 
 FRED_BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
 USER_AGENT = "data-hoover/0.1 (+local-first; contact: you@example.com)"
@@ -49,7 +50,7 @@ def fetch_fred_series_observations(
     headers = {"User-Agent": USER_AGENT}
     with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
         response = client.get(FRED_BASE_URL, params=params, headers=headers)
-    response.raise_for_status()
+    raise_for_status(response)
     payload = response.json()
     if isinstance(payload, dict) and payload.get("error_code"):
         raise ValueError(
