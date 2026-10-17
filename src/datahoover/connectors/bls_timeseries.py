@@ -12,6 +12,7 @@ from ..env import get_secret
 from ..sources import load_sources, Source
 from ..storage.duckdb_store import init_db, log_run, upsert_bls_timeseries_observations
 from ._retry import fetch_with_retry
+from ..redact import raise_for_status
 
 BLS_TIMESERIES_URL = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
 USER_AGENT = "data-hoover/0.1 (+local-first; contact: you@example.com)"
@@ -41,7 +42,7 @@ def fetch_bls_timeseries_payload(
     headers = {"User-Agent": USER_AGENT, "Content-Type": "application/json"}
     with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
         response = client.post(BLS_TIMESERIES_URL, json=body, headers=headers)
-    response.raise_for_status()
+    raise_for_status(response)
     payload = response.json()
     status = payload.get("status")
     if status and status != "REQUEST_SUCCEEDED":

@@ -16,6 +16,7 @@ from ..env import get_secret
 from ..storage.duckdb_store import init_db, upsert_twelvedata_time_series, log_run
 from ..sources import load_sources, Source
 from ._retry import fetch_with_retry
+from ..redact import raise_for_status, register_secret
 
 PRIMARY_GROUP = "primary"
 QUARTERLY_GROUP = "quarterly"
@@ -108,7 +109,7 @@ def fetch_time_series(
     with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
         r = client.get(base_url, headers=headers, params=params)
 
-    r.raise_for_status()
+    raise_for_status(r)
     raw = r.content
     data = r.json()
 
@@ -213,7 +214,9 @@ def _get_api_key_from_keychain() -> Optional[str]:
             timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
+            key = result.stdout.strip()
+            register_secret(key)
+            return key
     except Exception:
         pass
     return None

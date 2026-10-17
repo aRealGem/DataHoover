@@ -13,6 +13,7 @@ from ..env import get_secret
 from ..sources import load_sources, Source
 from ..storage.duckdb_store import init_db, log_run, upsert_eia_v2_observations
 from ._retry import fetch_with_retry
+from ..redact import raise_for_status
 
 EIA_V2_BASE = "https://api.eia.gov/v2"
 USER_AGENT = "data-hoover/0.1 (+local-first; contact: you@example.com)"
@@ -91,7 +92,7 @@ def fetch_eia_v2_page(
     headers = {"User-Agent": USER_AGENT}
     with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
         r = client.get(url, params=params, headers=headers)
-    r.raise_for_status()
+    raise_for_status(r)
     return r.json()
 
 

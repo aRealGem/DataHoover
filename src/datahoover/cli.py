@@ -4,6 +4,8 @@ import argparse
 import sys
 from pathlib import Path
 
+from . import redact
+
 from .connectors.usgs_earthquakes import ingest_usgs_geojson
 from .connectors.usgs_fdsn import ingest_usgs_fdsn_events
 from .connectors.eurostat_stats import ingest_eurostat_stats
@@ -305,6 +307,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Before anything can print: keys must never reach the tee'd weekly log,
+    # the pipeline report or a traceback. See datahoover/redact.py.
+    redact.install()
     args = build_parser().parse_args(argv)
 
     if args.cmd == "ingest-usgs":
