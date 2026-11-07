@@ -116,6 +116,19 @@ def test_fg_line_spaces_by_calendar_date_and_breaks_long_gaps() -> None:
     assert "readings, not calendar days" in sv.fg_line([{"date": "x", "value": 1}, {"date": "y", "value": 2}], sv.PEACH, "t")
 
 
+def test_fg_line_marks_isolated_readings() -> None:
+    """AB-007: a reading with no neighbour inside the gap rule is a move-only subpath (no ink) and needs a marker."""
+    sv = _load("sentiment_viz")
+    rows = [{"date": "2026-10-01", "value": 10}, {"date": "2026-10-04", "value": 20}, {"date": "2026-10-07", "value": 30}]
+    svg = sv.fg_line(rows, sv.PEACH, "t")
+    assert svg.count("<circle") == 3 and svg.count('r="3.5"') == 2 and svg.count('r="4.5"') == 1
+    rows = [{"date": "2026-10-01", "value": 10}, {"date": "2026-10-02", "value": 20}, {"date": "2026-10-09", "value": 30}, {"date": "2026-10-10", "value": 40}]
+    svg = sv.fg_line(rows, sv.PEACH, "t")
+    assert svg.count("<circle") == 1                                       # every reading is joined to a neighbour
+    rows = [{"date": "2026-10-01", "value": 10}, {"date": "2026-10-02", "value": None}, {"date": "2026-10-03", "value": 30}]
+    assert sv.fg_line(rows, sv.PEACH, "t").count("<circle") == 2           # a null breaks the line in index mode too
+
+
 def test_new_scripts_compile_on_python_311_grammar() -> None:
     """pyproject declares >=3.11: no PEP 701 f-string nesting or backslashes in expressions."""
     import shutil

@@ -83,15 +83,24 @@ def fg_line(rows: Sequence[Dict[str, Any]], color: str, title: str) -> str:
     for t in (0, 25, 45, 55, 75, 100):
         g.append(f'<line x1="{left}" x2="{left + pw}" y1="{y(t):.1f}" y2="{y(t):.1f}" stroke="{LINE}" stroke-width="1"/>'
                  f'<text x="{left - 6}" y="{y(t) + 4:.1f}" text-anchor="end" fill="{FAINT}" font-size="11" {FONT}>{t}</text>')
-    d, prev_i, last = [], None, None
+    d, prev_i, last, pts, linked = [], None, None, [], set()
     for i, r in enumerate(rows):
         v = _num(r.get("value"))
         if v is None:
             prev_i = None
             continue
         gap = by_date and prev_i is not None and (parsed[i] - parsed[prev_i]).days > 2
-        d.append(("L" if prev_i is not None and not gap else "M") + f"{x(i):.1f} {y(v):.1f}")
+        joined = prev_i is not None and not gap
+        d.append(("L" if joined else "M") + f"{x(i):.1f} {y(v):.1f}")
+        if joined:
+            linked.update((prev_i, i))
+        pts.append((i, v))
         prev_i, last = i, (i, v)
+    # A move-only subpath has no ink, so a reading with no neighbour within the gap rule would vanish
+    # (AB-007). Every such isolated reading gets its own marker; the final reading keeps the large one.
+    for i, v in pts:
+        if i not in linked and (i, v) != last:
+            g.append(f'<circle cx="{x(i):.1f}" cy="{y(v):.1f}" r="3.5" fill="{color}" stroke="{PANEL}" stroke-width="1.5"/>')
     if rows:
         first_lab = str(rows[0].get("date") or "")[:10]
         last_lab = str(rows[-1].get("date") or "")[:10]
