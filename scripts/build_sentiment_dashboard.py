@@ -370,6 +370,7 @@ def render_html(bundle: Dict[str, Any]) -> str:
     import sentiment_viz as sv
 
     payload = json.dumps(bundle, default=str, separators=(",", ":"))
+    safe_payload = payload.replace("</", "<\\/")  # keep the JSON island from closing the script tag
     meta = bundle["meta"]
     altme, cnn, st, reddit, rss, gdelt = (_panel(bundle, k) for k in ("altme", "cnn", "stocktwits", "reddit", "rss", "gdelt"))
     synth_n = sum(1 for p in bundle["panels"] if p["synthetic"])
@@ -381,9 +382,12 @@ def render_html(bundle: Dict[str, Any]) -> str:
         f'<tr><td>{html.escape(str(r.get("published_at") or "—")[:16].replace("T", " "))}</td><td>'
         + (f'<a href="{html.escape(r["link"])}" rel="noreferrer">{html.escape(r.get("title") or "")}</a>' if r.get("link") else html.escape(r.get("title") or ""))
         + '</td></tr>' for r in rss["data"]) or '<tr><td colspan="2" class="muted">No press releases yet (hoover ingest-rss --source fed_press_releases_rss).</td></tr>'
+    def _tone(r: Dict[str, Any]) -> str:
+        return "—" if r.get("avg_tone") is None else f"{float(r['avg_tone']):.2f}"
+
     gdelt_rows = "".join(
         f'<tr><td>{html.escape(str(r.get("topic")))}</td><td>{(r.get("severity") or 0):.2f}</td>'
-        f'<td>{"—" if r.get("avg_tone") is None else f"{float(r["avg_tone"]):.2f}"}</td><td>{html.escape(str(r.get("n_articles", "—")))}</td>'
+        f'<td>{_tone(r)}</td><td>{html.escape(str(r.get("n_articles", "—")))}</td>'
         f'<td>{html.escape(str(r.get("ts_start")))} → {html.escape(str(r.get("ts_end") or ""))}</td><td>{html.escape(str(r.get("summary") or ""))}</td></tr>'
         for r in gdelt["data"]) or '<tr><td colspan="6" class="muted">No sentiment_tone signals yet (hoover ingest-gdelt, then hoover compute-signals --since 7d).</td></tr>'
 
@@ -415,7 +419,7 @@ def render_html(bundle: Dict[str, Any]) -> str:
   <table class="tbl"><thead><tr><th style="width:14rem">Published</th><th>Title</th></tr></thead><tbody>{rss_rows}</tbody></table>
   <p class="muted">Source: rss_items where source = fed_press_releases_rss. Lane: PD-USGov, commercial-safe with attribution.</p></section>
 
-  <script type="application/json" id="bundle">{payload.replace("</", "<\\/")}</script>
+  <script type="application/json" id="bundle">{safe_payload}</script>
 """
     side = [("Latest", "#indices"), ("Alt.me F&G", "#altme"), ("CNN F&G", "#cnn"), ("StockTwits", "#stocktwits"),
             ("Reddit", "#reddit"), ("GDELT", "#gdelt"), ("Fed", "#fed")]

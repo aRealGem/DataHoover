@@ -51,11 +51,30 @@ def stat_tile(label: str, rows: Sequence[Dict[str, Any]], unit: str = "") -> str
 
 
 def fg_line(rows: Sequence[Dict[str, Any]], color: str, title: str) -> str:
-    """0-100 line over the window with the five published bands drawn behind it. Gaps where a value is missing."""
+    """0-100 line over the window with the five published bands drawn behind it.
+
+    Points sit at their calendar date (x = days since the first date), so a missing day stretches the gap
+    instead of compressing time; a run of more than two days without a value breaks the line.
+    Rows without a parseable date fall back to index spacing and the axis says so.
+    """
+    from datetime import date as _date
+
     w, h, left, right, top, bottom = 720, 220, 40, 110, 14, 30
     pw, ph = w - left - right, h - top - bottom
-    n = max(len(rows), 2)
-    x = lambda i: left + pw * i / (n - 1)
+    parsed = []
+    for i, r in enumerate(rows):
+        try:
+            parsed.append(_date.fromisoformat(str(r.get("date"))[:10]))
+        except ValueError:
+            parsed.append(None)
+    by_date = all(p is not None for p in parsed) and len(parsed) >= 2 and parsed[-1] > parsed[0]
+    if by_date:
+        span = (parsed[-1] - parsed[0]).days or 1
+        pos = [(p - parsed[0]).days / span for p in parsed]
+    else:
+        n = max(len(rows), 2)
+        pos = [i / (n - 1) for i in range(len(rows))]
+    x = lambda i: left + pw * pos[i]
     y = lambda v: top + ph * (1 - v / 100)
     g = []
     for k, (lo, hi, name) in enumerate(FG_BANDS):
@@ -64,25 +83,34 @@ def fg_line(rows: Sequence[Dict[str, Any]], color: str, title: str) -> str:
     for t in (0, 25, 45, 55, 75, 100):
         g.append(f'<line x1="{left}" x2="{left + pw}" y1="{y(t):.1f}" y2="{y(t):.1f}" stroke="{LINE}" stroke-width="1"/>'
                  f'<text x="{left - 6}" y="{y(t) + 4:.1f}" text-anchor="end" fill="{FAINT}" font-size="11" {FONT}>{t}</text>')
-    d, prev = [], False
-    last = None
+    d, prev_i, last = [], None, None
     for i, r in enumerate(rows):
         v = _num(r.get("value"))
         if v is None:
-            prev = False
+            prev_i = None
             continue
-        d.append(("L" if prev else "M") + f"{x(i):.1f} {y(v):.1f}")
-        prev, last = True, (i, v, r.get("date"))
-    dates = [r.get("date") for r in rows if r.get("date")]
-    for i, lab in ((0, dates[0] if dates else ""), (len(rows) - 1, dates[-1] if dates else "")):
-        g.append(f'<text x="{x(i):.1f}" y="{h - 10}" text-anchor="{"start" if i == 0 else "end"}" fill="{FAINT}" font-size="11" {FONT}>{_e(lab)}</text>')
+        gap = by_date and prev_i is not None and (parsed[i] - parsed[prev_i]).days > 2
+        d.append(("L" if prev_i is not None and not gap else "M") + f"{x(i):.1f} {y(v):.1f}")
+        prev_i, last = i, (i, v)
+    if rows:
+        first_lab = str(rows[0].get("date") or "")[:10]
+        last_lab = str(rows[-1].get("date") or "")[:10]
+        g.append(f'<text x="{x(0):.1f}" y="{h - 10}" fill="{FAINT}" font-size="11" {FONT}>{_e(first_lab)}</text>')
+        g.append(f'<text x="{x(len(rows) - 1):.1f}" y="{h - 10}" text-anchor="end" fill="{FAINT}" font-size="11" {FONT}>{_e(last_lab)}</text>')
+        axis = "calendar days" if by_date else "readings, not calendar days"
+        g.append(f'<text x="{left + pw / 2:.1f}" y="{h - 10}" text-anchor="middle" fill="{FAINT}" font-size="11" {FONT}>{axis}</text>')
     if d:
         g.append(f'<path d="{"".join(d)}" fill="none" stroke="{color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>')
     if last:
-        i, v, dt = last
+        i, v = last
         g.append(f'<circle cx="{x(i):.1f}" cy="{y(v):.1f}" r="4.5" fill="{color}" stroke="{PANEL}" stroke-width="2"/>'
                  f'<text x="{x(i) - 8:.1f}" y="{y(v) - 9:.1f}" text-anchor="end" fill="{INK}" font-size="13" {DISPLAY}>{v:.0f}</text>')
-    return (f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="{_e(title)}"><title>{_e(title)}</title>{"".join(g)}</svg>')
+    return _scroll(f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="{_e(title)}"><title>{_e(title)}</title>{"".join(g)}</svg>')
+
+
+def _scroll(svg: str) -> str:
+    """Wrap a 720-unit chart so phones scroll it sideways at a readable size instead of shrinking the type."""
+    return f'<div class="chart-scroll">{svg}</div>'
 
 
 def bull_bear_bars(rows: Sequence[Dict[str, Any]]) -> str:
@@ -106,7 +134,7 @@ def bull_bear_bars(rows: Sequence[Dict[str, Any]]) -> str:
             g.append(f'<rect x="{left}" y="{yy}" width="{max(bw, 1):.1f}" height="{barh}" rx="3" fill="{col}"/>'
                      f'<text x="{left + bw + 6:.1f}" y="{yy + barh - 2}" fill="{INK}" font-size="11" {DISPLAY}>{v:.0f} {name}</text>')
         g.append(f'<text x="{w - 4}" y="{yb + 17}" text-anchor="end" fill="{MUTED}" font-size="12" {FONT}>{_e(share)}</text>')
-    return (f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="StockTwits bullish and bearish message counts per symbol"><title>Bullish (periwinkle) and bearish (tan) message counts per symbol, last window</title>{"".join(g)}</svg>')
+    return _scroll(f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="StockTwits bullish and bearish message counts per symbol"><title>Bullish (periwinkle) and bearish (tan) message counts per symbol, last window</title>{"".join(g)}</svg>')
 
 
 def hbar(rows: Sequence[Dict[str, Any]], key: str, value: str, color: str, title: str, unit: str = "") -> str:
@@ -126,7 +154,7 @@ def hbar(rows: Sequence[Dict[str, Any]], key: str, value: str, color: str, title
         g.append(f'<text x="{left - 10}" y="{yy + barh - 2}" text-anchor="end" fill="{INK}" font-size="13" {FONT}>{_e(r[key])}</text>'
                  f'<rect x="{left}" y="{yy}" width="{max(bw, 1):.1f}" height="{barh}" rx="3" fill="{color}"/>'
                  f'<text x="{left + bw + 6:.1f}" y="{yy + barh - 2}" fill="{INK}" font-size="12" {DISPLAY}>{v:.0f}{_e(unit)}</text>')
-    return f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="{_e(title)}"><title>{_e(title)}</title>{"".join(g)}</svg>'
+    return _scroll(f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="{_e(title)}"><title>{_e(title)}</title>{"".join(g)}</svg>')
 
 
 def tone_bar(rows: Sequence[Dict[str, Any]]) -> str:
@@ -154,7 +182,7 @@ def tone_bar(rows: Sequence[Dict[str, Any]]) -> str:
             g.append(f'<rect x="{x1:.1f}" y="{yy}" width="{max(bw, 1):.1f}" height="{barh}" rx="3" fill="{LILAC}"/>'
                      f'<text x="{(x(v) if v >= 0 else x(0)) + 6:.1f}" y="{yy + barh - 2}" fill="{INK}" font-size="12" {DISPLAY}>{v:+.2f}</text>')
         g.append(f'<text x="{w - 4}" y="{yy + barh - 2}" text-anchor="end" fill="{MUTED}" font-size="11" {FONT}>severity {(_num(r.get("severity")) or 0):.2f} · {_e(r.get("n_articles", "—"))} articles</text>')
-    return f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="GDELT average tone per topic, diverging around zero"><title>Average GDELT tone per topic; left of the line is negative</title>{"".join(g)}</svg>'
+    return _scroll(f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="GDELT average tone per topic, diverging around zero"><title>Average GDELT tone per topic; left of the line is negative</title>{"".join(g)}</svg>')
 
 
 CSS = """
@@ -165,6 +193,8 @@ CSS = """
 .tile .word{font:600 .95rem/1.2 var(--lc-display);letter-spacing:.08em;text-transform:uppercase;color:var(--lc-peach)}
 .tile .when,.tile .chg,.tile .range{font-size:.82rem;color:var(--lc-muted)}
 .chart{display:block;width:100%;height:auto;margin-top:8px}
+.chart-scroll{min-width:0;max-width:100%}
+@media (max-width:760px){.chart-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}.chart-scroll .chart{min-width:640px}}
 .legend{display:flex;flex-wrap:wrap;gap:4px 16px;margin:8px 0 0;font-size:.82rem;color:var(--lc-muted)}
 .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:5px}
 .prov{display:flex;flex-wrap:wrap;gap:6px 10px;margin:0 0 6px}

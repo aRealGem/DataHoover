@@ -58,6 +58,7 @@ def test_date_strip_counts_and_links() -> None:
     lp = _load("lcars_page")
     out = lp.date_strip(["2026-06-28", "2026-06-27", "bogus"], weeks=2, today=date(2026, 6, 30))
     assert "<b>2</b> dashboards" in out and "latest <b>2026-06-28</b>" in out and "<b>2</b> days since latest" in out
+    assert "in the 2 weeks shown (2026-06-22 to 2026-07-05)" in out
     assert out.count('<a href="./2026-06-2') == 2 and out.count("<i title") == 12
     assert lp.date_strip(["bogus"]) == ""
 
@@ -77,6 +78,7 @@ def test_date_strip_window_follows_stale_latest() -> None:
     lp = _load("lcars_page")
     out = lp.date_strip(["2026-06-28"], weeks=2, today=date(2026, 11, 7))
     assert 'href="./2026-06-28/"' in out and "<b>132</b> days since latest" in out
+    assert "in the last" not in out and "weeks shown (2026-06-15 to 2026-06-28)" in out
 
 
 def test_sentiment_viz_draws_from_rows() -> None:
@@ -101,3 +103,28 @@ def test_sentiment_render_html_has_no_cdn() -> None:
     out = bs.render_html(bundle)
     assert "cdn.plot.ly" not in out and "Plotly" not in out and 'class="lc-frame"' in out
     assert "synthetic seed" in out and "No data" in out and "</script>" in out
+
+
+def test_fg_line_spaces_by_calendar_date_and_breaks_long_gaps() -> None:
+    import re
+    sv = _load("sentiment_viz")
+    rows = [{"date": "2026-10-01", "value": 10}, {"date": "2026-10-02", "value": 20}, {"date": "2026-10-11", "value": 30}]
+    svg = sv.fg_line(rows, sv.PEACH, "t")
+    xs = [float(m) for m in re.findall(r"[ML](\d+\.\d)", re.search(r'<path d="([^"]+)"', svg).group(1))]
+    assert len(xs) == 3 and (xs[1] - xs[0]) * 5 < (xs[2] - xs[1])          # 1 day vs 9 days
+    assert re.search(r'<path d="M[^"]*M', svg) and "calendar days" in svg   # the 9-day hole breaks the line
+    assert "readings, not calendar days" in sv.fg_line([{"date": "x", "value": 1}, {"date": "y", "value": 2}], sv.PEACH, "t")
+
+
+def test_new_scripts_compile_on_python_311_grammar() -> None:
+    """pyproject declares >=3.11: no PEP 701 f-string nesting or backslashes in expressions."""
+    import shutil
+    import subprocess
+    import sys
+    py = shutil.which("python3.11")
+    if not py:
+        pytest.skip("python3.11 not installed here")
+    files = [ROOT / "scripts" / n for n in ("lcars_page.py", "sentiment_viz.py", "build_sentiment_dashboard.py",
+                                              "reskin_rollup_index.py", "publish_sentiment_to_expressionpi.py")]
+    r = subprocess.run([py, "-m", "py_compile", *map(str, files)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr

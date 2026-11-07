@@ -130,7 +130,7 @@ def date_strip(dates: list[str], *, weeks: int = 16, today: "date | None" = None
         '<div class="pub-strip" role="group" aria-label="Publication days">'
         f'<p class="kv"><span><b>{len(have)}</b> dashboards</span><span>first <b>{first.isoformat()}</b></span>'
         f'<span>latest <b>{latest.isoformat()}</b></span><span><b>{since}</b> days since latest</span>'
-        f'<span><b>{in_window}</b> in the last {weeks} weeks</span></p>'
+        f'<span><b>{in_window}</b> in the {weeks} weeks shown ({start.isoformat()} to {end.isoformat()})</span></p>'
         f'<div class="grid">{"".join(cells)}</div>'
         '<p class="legend"><i style="background:var(--lc-peach)"></i>day with a published dashboard '
         '<i style="background:var(--lc-line)"></i>no publish · rows Monday to Sunday, newest week on the right</p></div>'
