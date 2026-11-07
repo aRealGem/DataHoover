@@ -18,7 +18,8 @@ can never be confused with real ingest output.
 Each panel header carries a redistribution-lane badge (commercial-safe vs
 personal-use) computed from the source's `redistribute` tag in `sources.toml`.
 
-Output: `data/dashboard/sentiment.html` (gitignored — regenerate locally).
+Output: `data/dashboard/sentiment.html` (gitignored — regenerate locally). Charts are inline SVG
+(scripts/sentiment_viz.py) in the LCARS console look (scripts/lcars_page.py); no CDN or JS is needed.
 """
 from __future__ import annotations
 
@@ -34,6 +35,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import duckdb
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # lcars_page, sentiment_viz
 DEFAULT_DB = REPO_ROOT / "data" / "warehouse.duckdb"
 DEFAULT_OUTPUT = REPO_ROOT / "data" / "dashboard" / "sentiment.html"
 DEFAULT_SOURCES = REPO_ROOT / "sources.toml"
@@ -352,163 +354,73 @@ def _provenance_chip(synthetic: bool, source: str) -> str:
     return f'<span class="chip">live: {html.escape(source)}</span>'
 
 
+def _panel(bundle: Dict[str, Any], pid: str) -> Dict[str, Any]:
+    return next(p for p in bundle["panels"] if p["id"] == pid)
+
+
+def _prov(p: Dict[str, Any]) -> str:
+    lane = "chip ok" if p["lane"] == "commercial-safe" else "chip warn"
+    synth = '<span class="chip bad">synthetic seed, table empty</span>' if p["synthetic"] else '<span class="chip ok">ingested rows</span>'
+    return f'<p class="prov"><span class="{lane}">{html.escape(p["lane"])}</span>{synth}<span class="muted">source {html.escape(p["source"])}</span></p>'
+
+
 def render_html(bundle: Dict[str, Any]) -> str:
+    """LCARS console page with inline-SVG charts (ISC-057). No CDN, no JavaScript: the PDF renders offline."""
+    import lcars_page
+    import sentiment_viz as sv
+
     payload = json.dumps(bundle, default=str, separators=(",", ":"))
     meta = bundle["meta"]
-    panels = bundle["panels"]
+    altme, cnn, st, reddit, rss, gdelt = (_panel(bundle, k) for k in ("altme", "cnn", "stocktwits", "reddit", "rss", "gdelt"))
+    synth_n = sum(1 for p in bundle["panels"] if p["synthetic"])
+    note = (f'<p class="lc-sub">Generated {html.escape(meta["generated_at"])} · {meta["panel_count"]} panels · '
+            f'{meta["lookback_days"]}-day window for the indices, {meta["hours_window"]}-hour window for message counts. '
+            + (f'<strong>{synth_n} panel(s) show synthetic seeds because the underlying table is empty.</strong>' if synth_n else 'All panels show ingested rows.') + '</p>')
 
-    chips = []
-    for p in panels:
-        lane = p["lane"]
-        chips.append(
-            f'<div class="card"><strong>{html.escape(p["title"])}</strong> '
-            f'{_lane_chip(lane)} {_provenance_chip(p["synthetic"], p["source"])}</div>'
-        )
+    rss_rows = "".join(
+        f'<tr><td>{html.escape(str(r.get("published_at") or "—")[:16].replace("T", " "))}</td><td>'
+        + (f'<a href="{html.escape(r["link"])}" rel="noreferrer">{html.escape(r.get("title") or "")}</a>' if r.get("link") else html.escape(r.get("title") or ""))
+        + '</td></tr>' for r in rss["data"]) or '<tr><td colspan="2" class="muted">No press releases yet (hoover ingest-rss --source fed_press_releases_rss).</td></tr>'
+    gdelt_rows = "".join(
+        f'<tr><td>{html.escape(str(r.get("topic")))}</td><td>{(r.get("severity") or 0):.2f}</td>'
+        f'<td>{"—" if r.get("avg_tone") is None else f"{float(r["avg_tone"]):.2f}"}</td><td>{html.escape(str(r.get("n_articles", "—")))}</td>'
+        f'<td>{html.escape(str(r.get("ts_start")))} → {html.escape(str(r.get("ts_end") or ""))}</td><td>{html.escape(str(r.get("summary") or ""))}</td></tr>'
+        for r in gdelt["data"]) or '<tr><td colspan="6" class="muted">No sentiment_tone signals yet (hoover ingest-gdelt, then hoover compute-signals --since 7d).</td></tr>'
 
-    return f"""<!DOCTYPE html>
-<html lang=\"en\">
-<head>
-  <meta charset=\"utf-8\"/>
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/>
-  <title>DataHoover — sentiment dashboard</title>
-  <script src=\"https://cdn.plot.ly/plotly-2.27.0.min.js\"></script>
-  <style>
-    :root {{ --bg:#f6f7fb; --fg:#1a1d26; --muted:#5c6578; --card:#fff; --border:#e2e6ef; }}
-    @media (prefers-color-scheme: dark) {{
-      :root {{ --bg:#12141a; --fg:#e8eaef; --muted:#9aa3b5; --card:#1c1f28; --border:#2a3142; }}
-    }}
-    * {{ box-sizing:border-box; }}
-    body {{ font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; margin:0; background:var(--bg); color:var(--fg); }}
-    header {{ padding:1rem 1.25rem; border-bottom:1px solid var(--border); background:var(--card); }}
-    h1 {{ font-size:1.15rem; margin:0 0 .35rem; }}
-    .sub {{ color:var(--muted); font-size:.85rem; }}
-    main {{ padding:1rem; max-width:1200px; margin:0 auto; }}
-    .card {{ background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.75rem 1rem; margin-bottom:1rem; }}
-    .grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(380px, 1fr)); gap:1rem; }}
-    .chip {{ font-size:.7rem; padding:.18rem .5rem; border-radius:999px; background:var(--border); color:var(--fg); margin-left:.35rem; }}
-    h2 {{ font-size:.95rem; margin:0 0 .5rem; color:var(--muted); font-weight:600; }}
-    .plot {{ min-height: 320px; }}
-    table {{ width:100%; border-collapse:collapse; font-size:.85rem; }}
-    th,td {{ text-align:left; padding:.4rem .5rem; border-bottom:1px solid var(--border); }}
-    th {{ color:var(--muted); font-weight:600; }}
-    .legend {{ font-size:.75rem; color:var(--muted); margin-top:.4rem; }}
-  </style>
-</head>
-<body>
-<header>
-  <h1>DataHoover — sentiment dashboard</h1>
-  <div class=\"sub\">Generated {html.escape(meta["generated_at"])} · {meta["panel_count"]} panels · synthetic seeds appear when the underlying table is empty.</div>
-</header>
-<main>
-  <div class=\"card\">
-    <h2>Lanes & provenance</h2>
-    {"".join(chips)}
-  </div>
+    main = f"""  <h1>Sentiment dashboard</h1>
+{note}
+  <section class="lc-panel hot" id="indices"><h2>Fear &amp; Greed, latest</h2>
+  <div class="tiles">{sv.stat_tile("Alt.me crypto Fear & Greed", altme["data"])}{sv.stat_tile("CNN Fear & Greed composite", cnn["data"])}</div>
+  <p class="muted">Band words are the publishers' own classes (0–25 extreme fear, 25–45 fear, 45–55 neutral, 55–75 greed, 75–100 extreme greed).</p></section>
 
-  <div class=\"grid\">
-    <div class=\"card\"><h2>Alt.me Crypto Fear &amp; Greed (90d)</h2><div id=\"plot-altme\" class=\"plot\"></div></div>
-    <div class=\"card\"><h2>CNN Fear &amp; Greed composite (90d)</h2><div id=\"plot-cnn\" class=\"plot\"></div></div>
-    <div class=\"card\"><h2>StockTwits bull/bear (last 24h)</h2><div id=\"plot-st\" class=\"plot\"></div></div>
-    <div class=\"card\"><h2>Reddit post volume (last 24h)</h2><div id=\"plot-reddit\" class=\"plot\"></div></div>
-  </div>
+  <section class="lc-panel" id="altme"><h2>Alt.me crypto Fear &amp; Greed, {meta["lookback_days"]} days</h2>{_prov(altme)}
+  {sv.fg_line(altme["data"], sv.PEACH, "Alt.me crypto Fear and Greed index, 0 to 100, over the window")}</section>
 
-  <div class=\"card\"><h2>Federal Reserve press releases (recent)</h2>
-    <table id=\"rss-table\"><thead>
-      <tr><th style=\"width:14rem\">Published</th><th>Title</th></tr>
-    </thead><tbody></tbody></table>
-    <div class=\"legend\">Source: <code>rss_items</code> where <code>source='fed_press_releases_rss'</code>. Lane: PD-USGov / commercial-safe with attribution.</div>
-  </div>
+  <section class="lc-panel alt" id="cnn"><h2>CNN Fear &amp; Greed composite, {meta["lookback_days"]} days</h2>{_prov(cnn)}
+  {sv.fg_line(cnn["data"], sv.PERI, "CNN Fear and Greed composite, 0 to 100, over the window")}</section>
 
-  <div class=\"card\"><h2>GDELT sentiment-tone signals (recent)</h2>
-    <table id=\"gdelt-table\"><thead>
-      <tr><th>Topic</th><th>Severity</th><th>Avg tone</th><th>N articles</th><th>Window</th><th>Summary</th></tr>
-    </thead><tbody></tbody></table>
-    <div class=\"legend\">Source: <code>signals</code> rows where <code>signal_type='sentiment_tone'</code>. Lane: personal-use only (CC-BY-NC-SA).</div>
-  </div>
-</main>
+  <section class="lc-panel" id="stocktwits"><h2>StockTwits bull / bear, last {meta["hours_window"]} h</h2>{_prov(st)}
+  {sv.bull_bear_bars(st["data"])}
+  <p class="legend"><span><i style="background:{sv.PERI}"></i>Bullish messages</span><span><i style="background:{sv.TAN}"></i>Bearish messages</span><span>Share = bullish ÷ (bullish + bearish)</span></p></section>
 
-<script>
-const BUNDLE = {payload};
+  <section class="lc-panel alt" id="reddit"><h2>Reddit post volume, last {meta["hours_window"]} h</h2>{_prov(reddit)}
+  {sv.hbar(reddit["data"], "subreddit", "posts", sv.TAN, "Reddit posts per subreddit in the window", " posts")}</section>
 
-(function() {{
-  const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const layoutBase = {{
-    margin: {{ t: 30, r: 20, b: 40, l: 50 }},
-    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-    font: {{ color: dark ? '#e8eaef' : '#1a1d26' }},
-    xaxis: {{ gridcolor: dark ? '#2a3142' : '#e2e6ef' }},
-    yaxis: {{ gridcolor: dark ? '#2a3142' : '#e2e6ef' }}
-  }};
-  const PLOTLY_OPTS = {{ displayModeBar: false, responsive: true }};
+  <section class="lc-panel" id="gdelt"><h2>GDELT sentiment-tone signals, recent</h2>{_prov(gdelt)}
+  {sv.tone_bar(gdelt["data"])}
+  <table class="tbl"><thead><tr><th>Topic</th><th>Severity</th><th>Avg tone</th><th>N articles</th><th>Window</th><th>Summary</th></tr></thead><tbody>{gdelt_rows}</tbody></table>
+  <p class="muted">Source: signals rows where signal_type = sentiment_tone. Lane: personal-use only (CC-BY-NC-SA).</p></section>
 
-  // Alt.me F&G
-  const altme = BUNDLE.panels.find(p => p.id === 'altme').data;
-  Plotly.newPlot('plot-altme', [
-    {{
-      x: altme.map(d => d.date), y: altme.map(d => d.value),
-      type: 'scatter', mode: 'lines', line: {{ color: '#f4a900', width: 2 }},
-      name: 'F&G'
-    }}
-  ], {{ ...layoutBase, yaxis: {{ ...layoutBase.yaxis, range: [0, 100], title: '0=Extreme Fear · 100=Extreme Greed' }} }}, PLOTLY_OPTS);
+  <section class="lc-panel alt" id="fed"><h2>Federal Reserve press releases, recent</h2>{_prov(rss)}
+  <table class="tbl"><thead><tr><th style="width:14rem">Published</th><th>Title</th></tr></thead><tbody>{rss_rows}</tbody></table>
+  <p class="muted">Source: rss_items where source = fed_press_releases_rss. Lane: PD-USGov, commercial-safe with attribution.</p></section>
 
-  // CNN F&G
-  const cnn = BUNDLE.panels.find(p => p.id === 'cnn').data;
-  Plotly.newPlot('plot-cnn', [
-    {{
-      x: cnn.map(d => d.date), y: cnn.map(d => d.value),
-      type: 'scatter', mode: 'lines', line: {{ color: '#7159b5', width: 2 }},
-      name: 'CNN composite'
-    }}
-  ], {{ ...layoutBase, yaxis: {{ ...layoutBase.yaxis, range: [0, 100] }} }}, PLOTLY_OPTS);
-
-  // StockTwits bull/bear
-  const st = BUNDLE.panels.find(p => p.id === 'stocktwits').data;
-  Plotly.newPlot('plot-st', [
-    {{ x: st.map(d => d.symbol), y: st.map(d => d.bull), name: 'Bullish', type: 'bar', marker: {{ color: '#1f9d55' }} }},
-    {{ x: st.map(d => d.symbol), y: st.map(d => d.bear), name: 'Bearish', type: 'bar', marker: {{ color: '#cc1f1a' }} }}
-  ], {{ ...layoutBase, barmode: 'group' }}, PLOTLY_OPTS);
-
-  // Reddit
-  const reddit = BUNDLE.panels.find(p => p.id === 'reddit').data;
-  Plotly.newPlot('plot-reddit', [
-    {{ x: reddit.map(d => d.subreddit), y: reddit.map(d => d.posts), type: 'bar', marker: {{ color: '#ff4500' }}, name: 'Posts' }}
-  ], {{ ...layoutBase }}, PLOTLY_OPTS);
-
-  // Fed RSS table
-  const rss = BUNDLE.panels.find(p => p.id === 'rss').data;
-  const rssBody = document.querySelector('#rss-table tbody');
-  for (const row of rss) {{
-    const tr = document.createElement('tr');
-    const safeTitle = (row.title || '').replace(/</g, '&lt;');
-    const link = row.link ? `<a href=\"${{row.link}}\" target=\"_blank\" rel=\"noreferrer\">${{safeTitle}}</a>` : safeTitle;
-    tr.innerHTML = `<td>${{row.published_at || '—'}}</td><td>${{link}}</td>`;
-    rssBody.appendChild(tr);
-  }}
-  if (!rss.length) {{
-    rssBody.innerHTML = '<tr><td colspan=\"2\" style=\"color:var(--muted)\">No press releases yet — run <code>hoover ingest-rss --source fed_press_releases_rss</code>.</td></tr>';
-  }}
-
-  // GDELT table
-  const gdelt = BUNDLE.panels.find(p => p.id === 'gdelt').data;
-  const tbody = document.querySelector('#gdelt-table tbody');
-  for (const row of gdelt) {{
-    const tr = document.createElement('tr');
-    tr.innerHTML =
-      `<td>${{row.topic}}</td>` +
-      `<td>${{(row.severity ?? 0).toFixed(2)}}</td>` +
-      `<td>${{row.avg_tone == null ? '—' : Number(row.avg_tone).toFixed(2)}}</td>` +
-      `<td>${{row.n_articles ?? '—'}}</td>` +
-      `<td>${{row.ts_start}} → ${{row.ts_end ?? ''}}</td>` +
-      `<td>${{row.summary ?? ''}}</td>`;
-    tbody.appendChild(tr);
-  }}
-  if (!gdelt.length) {{
-    tbody.innerHTML = '<tr><td colspan=\"6\" style=\"color:var(--muted)\">No sentiment_tone signals yet — run <code>hoover ingest-gdelt</code> then <code>hoover compute-signals --since 7d</code>.</td></tr>';
-  }}
-}})();
-</script>
-</body>
-</html>"""
+  <script type="application/json" id="bundle">{payload.replace("</", "<\\/")}</script>
+"""
+    side = [("Latest", "#indices"), ("Alt.me F&G", "#altme"), ("CNN F&G", "#cnn"), ("StockTwits", "#stocktwits"),
+            ("Reddit", "#reddit"), ("GDELT", "#gdelt"), ("Fed", "#fed")]
+    page = lcars_page.page("DataHoover — sentiment dashboard", "DataHoover", "Sentiment · " + meta["generated_at"][:10], side, main)
+    return page.replace("</style>", sv.CSS + "</style>", 1)
 
 
 # --------------------------------------------------------------------------- #
