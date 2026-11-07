@@ -110,5 +110,9 @@ def test_worldbank_macro_fiscal_parse():
     ingested_at = datetime(2026, 1, 31, tzinfo=timezone.utc)
     rows = _normalize_entries(source, entries, ingested_at)
 
-    assert len(rows) == 3
-    assert {r["series_id"] for r in rows} == {"NY.GDP.MKTP.CN", "GC.XPN.INTP.CN", "GC.REV.XGRT.GD.ZS"}
+    # ISC-008: fixture now carries all four fiscal_stress inputs for USA (2022) plus an
+    # incomplete JPN country (3 series) so the no-zero-substitution rule is exercised.
+    assert len(rows) == 8
+    assert {r["series_id"] for r in rows} == {
+        "NY.GDP.MKTP.CN", "GC.XPN.INTP.CN", "GC.REV.XGRT.GD.ZS", "GC.DOD.TOTL.GD.ZS", "GC.NLD.TOTL.GD.ZS"}
+    assert {r["country_id"] for r in rows} == {"USA", "JPN"}

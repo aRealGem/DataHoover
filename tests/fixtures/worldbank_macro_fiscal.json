@@ -3,12 +3,18 @@
     "page": 1,
     "pages": 1,
     "per_page": 50,
-    "total": 3
+    "total": 8
   },
   [
     {
-      "indicator": {"id": "NY.GDP.MKTP.CN", "value": "GDP (current LCU)"},
-      "country": {"id": "USA", "value": "United States"},
+      "indicator": {
+        "id": "NY.GDP.MKTP.CN",
+        "value": "GDP (current LCU)"
+      },
+      "country": {
+        "id": "US",
+        "value": "United States"
+      },
       "countryiso3code": "USA",
       "date": "2022",
       "value": 25000000,
@@ -17,8 +23,14 @@
       "decimal": 0
     },
     {
-      "indicator": {"id": "GC.XPN.INTP.CN", "value": "Interest payments (current LCU)"},
-      "country": {"id": "USA", "value": "United States"},
+      "indicator": {
+        "id": "GC.XPN.INTP.CN",
+        "value": "Interest payments (current LCU)"
+      },
+      "country": {
+        "id": "US",
+        "value": "United States"
+      },
       "countryiso3code": "USA",
       "date": "2022",
       "value": 125000,
@@ -27,9 +39,95 @@
       "decimal": 0
     },
     {
-      "indicator": {"id": "GC.REV.XGRT.GD.ZS", "value": "Revenue excluding grants (% of GDP)"},
-      "country": {"id": "USA", "value": "United States"},
+      "indicator": {
+        "id": "GC.REV.XGRT.GD.ZS",
+        "value": "Revenue excluding grants (% of GDP)"
+      },
+      "country": {
+        "id": "US",
+        "value": "United States"
+      },
       "countryiso3code": "USA",
+      "date": "2022",
+      "value": 20.5,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.DOD.TOTL.GD.ZS",
+        "value": "Central government debt, total (% of GDP)"
+      },
+      "country": {
+        "id": "US",
+        "value": "United States"
+      },
+      "countryiso3code": "USA",
+      "date": "2022",
+      "value": 110.0,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 0
+    },
+    {
+      "indicator": {
+        "id": "GC.NLD.TOTL.GD.ZS",
+        "value": "Net lending (+) / net borrowing (-) (% of GDP)"
+      },
+      "country": {
+        "id": "US",
+        "value": "United States"
+      },
+      "countryiso3code": "USA",
+      "date": "2022",
+      "value": -5.0,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 0
+    },
+    {
+      "indicator": {
+        "id": "NY.GDP.MKTP.CN",
+        "value": "GDP (current LCU)"
+      },
+      "country": {
+        "id": "JP",
+        "value": "Japan"
+      },
+      "countryiso3code": "JPN",
+      "date": "2022",
+      "value": 25000000,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 0
+    },
+    {
+      "indicator": {
+        "id": "GC.XPN.INTP.CN",
+        "value": "Interest payments (current LCU)"
+      },
+      "country": {
+        "id": "JP",
+        "value": "Japan"
+      },
+      "countryiso3code": "JPN",
+      "date": "2022",
+      "value": 125000,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 0
+    },
+    {
+      "indicator": {
+        "id": "GC.REV.XGRT.GD.ZS",
+        "value": "Revenue excluding grants (% of GDP)"
+      },
+      "country": {
+        "id": "JP",
+        "value": "Japan"
+      },
+      "countryiso3code": "JPN",
       "date": "2022",
       "value": 20.5,
       "unit": "",
