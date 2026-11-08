@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import math
 import random
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -15,12 +16,17 @@ from datahoover.storage.duckdb_store import init_db
 
 START = date(2024, 4, 1)
 END = date(2026, 11, 6)
+NY = ZoneInfo("America/New_York")
+HOLIDAY = date(2026, 9, 7)          # no daily prints (Labor Day)
+UNCERTAIN_RT = date(2026, 7, 11)    # no successful run at all
+PARTIAL_RT = date(2026, 8, 1)       # run succeeded but did not fetch DHHNGSP
+IDS = ("DCOILBRENTEU", "DCOILWTICO", "DHHNGSP", "GASREGCOVW")
 
 
 def _bdays(a, b):
     d, out = a, []
     while d <= b:
-        if d.weekday() < 5:
+        if d.weekday() < 5 and d != HOLIDAY:
             out.append(d)
         d += timedelta(days=1)
     return out
@@ -35,7 +41,7 @@ def _prices(seed, dates, p0):
 
 
 def _snapshot_dates():
-    """2026-04-22 (Wed), gap, then weekly Saturdays from 06-27; 07-11 has no run."""
+    """2026-04-22 (Wed), gap, then weekly Saturdays 06-27 .. 11-07."""
     rts = [date(2026, 4, 22)]
     d = date(2026, 6, 27)
     while d <= date(2026, 11, 7):
@@ -44,7 +50,9 @@ def _snapshot_dates():
     return rts
 
 
-UNCERTAIN_RT = date(2026, 7, 11)
+def _raw(sid, local_naive):
+    utc = local_naive.replace(tzinfo=NY).astimezone(timezone.utc)
+    return f"/home/x/data/raw/fred/series_{sid}_{utc.strftime('%Y-%m-%dT%H-%M-%SZ')}.json"
 
 
 def make_rows():
@@ -58,40 +66,56 @@ def make_rows():
     }
     obs, runs = [], []
     for i, rt in enumerate(_snapshot_dates()):
-        t0 = datetime.combine(rt, time(9, 0))
-        ing = t0 + timedelta(minutes=5)
+        t0 = datetime.combine(rt, time(9, 0))            # host-local naive, like the warehouse
+        fetched = [s for s in IDS if not (rt == PARTIAL_RT and s == "DHHNGSP")]
         if rt != UNCERTAIN_RT:
-            runs.append((f"r{i}", t0, t0 + timedelta(minutes=20), "ok"))
-        runs.append((f"e{i}", t0 - timedelta(hours=3), t0 - timedelta(hours=2), "error"))
-        for sid, series in truth.items():
+            runs.append((f"r{i}", t0, t0 + timedelta(minutes=20), "ok", "series=" + ",".join(fetched)))
+        runs.append((f"e{i}", t0 - timedelta(hours=3), t0 - timedelta(hours=2), "error", "boom"))
+        for j, sid in enumerate(IDS):
+            ing = t0 + timedelta(minutes=5 + j, microseconds=123456)
             lag = 6 if sid == "GASREGCOVW" else 3
-            ds = [d for d in sorted(series) if d <= rt - timedelta(days=lag)][-520:]
+            ds = [d for d in sorted(truth[sid]) if d <= rt - timedelta(days=lag)][-520:]
             for d in ds:
-                v = series[d]
+                v = truth[sid][d]
                 if sid == "DCOILWTICO" and d == date(2026, 6, 1) and rt >= date(2026, 7, 4):
-                    v += 0.25                          # one revision
-                obs.append((sid, d, v, rt, ing))
+                    v += 0.25                              # one revision
+                obs.append((sid, d, v, rt, rt + timedelta(days=1), ing, _raw(sid, ing)))
     return obs, runs, truth
+
+
+def _write_warehouse(path, obs, runs):
+    import duckdb
+    init_db(path)
+    csv_path = path.parent / f"{path.stem}-obs.csv"
+    csv_path.write_text("".join(
+        f"{spec.SOURCE},{s},{d},{v!r},{rs},{re_},x,{ing},{raw}\n" for s, d, v, rs, re_, ing, raw in obs)
+        + "other_source,DCOILWTICO,2026-01-02,1.0,2026-01-03,2026-01-03,x,,\n")
+    con = duckdb.connect(str(path))
+    con.execute(f"COPY fred_series_observations FROM '{csv_path}' (HEADER false)")
+    con.executemany("INSERT INTO ingest_runs VALUES (?,?,?,?,?,?,?,?,?)",
+                    [(rid, spec.SOURCE, "", st, en, status, 0, 0, msg) for rid, st, en, status, msg in runs])
+    con.close()
 
 
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
     obs, runs, truth = make_rows()
     wh = tmp_path_factory.mktemp("wh") / "warehouse.duckdb"
-    init_db(wh)
-    import duckdb
-    con = duckdb.connect(str(wh))
-    csv_path = wh.parent / "obs.csv"
-    csv_path.write_text("".join(
-        f"{spec.SOURCE},{s},{d},{v!r},{rt},{rt},x,{ing},\n" for s, d, v, rt, ing in obs)
-        + "other_source,DCOILWTICO,2026-01-02,1.0,2026-01-03,2026-01-03,x,,\n")
-    con.execute(f"COPY fred_series_observations FROM '{csv_path}' (HEADER false)")
-    con.executemany("INSERT INTO ingest_runs VALUES (?,?,?,?,?,?,?,?,?)",
-                    [(rid, spec.SOURCE, "", st, en, status, 0, 0, "") for rid, st, en, status in runs])
-    con.close()
+    _write_warehouse(wh, obs, runs)
     blob = data.extract_from_warehouse(wh)
     panel = data.load_extract(blob)
     return {"wh": wh, "blob": blob, "panel": panel, "truth": truth, "recs": replay.replay(panel)}
+
+
+@pytest.fixture
+def frozen(monkeypatch):
+    monkeypatch.setattr(spec, "SPEC_FROZEN", True)
+    monkeypatch.setattr(run, "code_identity", lambda: {
+        "code_tree_sha256": "t", "code_head": "abc", "code_dirty": False})
+
+
+def _cell(cell_id):
+    return next(c for c in spec.CELLS if c.cell_id == cell_id)
 
 
 # --- baselines ---------------------------------------------------------------
@@ -102,7 +126,6 @@ def test_quantile_type7():
 
 
 def test_b0_median_is_exactly_zero_on_asymmetric_sample():
-    # AB-005: subtract the median, not the mean; heavily skewed sample.
     vals = [100.0]
     rng = random.Random(7)
     for _ in range(400):
@@ -110,81 +133,110 @@ def test_b0_median_is_exactly_zero_on_asymmetric_sample():
     s = [(START + timedelta(days=i), v) for i, v in enumerate(vals)]
     qs, why = bl.b0_empirical(s, 5)
     assert why is None and qs[0.5] == 0.0
-    assert qs[0.975] - qs[0.5] != qs[0.5] - qs[0.025]   # asymmetry preserved
-    qs_spread, _ = bl.b0_empirical(s, 1, log=False)
-    assert qs_spread[0.5] == 0.0
+    assert bl.b0_empirical(s[:-1], 5)[0][0.5] == 0.0          # even sample count too
+    assert qs[0.975] - qs[0.5] != qs[0.5] - qs[0.025]
+    assert bl.b0_empirical(s, 1, log=False)[0][0.5] == 0.0
 
 
 def test_nonpositive_prices_abstain():
     s = [(START + timedelta(days=i), 50.0 + i) for i in range(400)]
-    s[200] = (s[200][0], 0.0)
+    s[300] = (s[300][0], 0.0)
     assert bl.b1_gaussian_ewma(s, 1)[0] is None
     assert all(v[0] is None for v in bl.rv_baselines(s, 0).values())
     assert bl.b2_seasonal_naive(s, 1)[0] is None
-    assert bl.b0_empirical(s[-50:] + [(END, -1.0)], 1)[0] is None
+    assert bl.b0_empirical(s, 1)[0] is None
     assert bl.b0_empirical(s, 1, log=False)[0] is not None   # spread levels may be <= 0
 
 
-def test_rv_errors_use_only_matured_labels():
+def test_rv_baselines_nonnegative():
     rng = random.Random(3)
     s = [(START + timedelta(days=i), 50 * math.exp(rng.gauss(0, .02) * (i % 7 + 1))) for i in range(500)]
-    full = bl.rv_baselines(s, 2)
-    # appending future data must be the only way to change the forecast; truncation is the info set
-    assert bl.rv_baselines(s, 2) == full
-    for name, (qs, why) in full.items():
+    for qs, why in bl.rv_baselines(s, 2).values():
         assert why is None and all(v >= 0 for v in qs.values())
 
 
 # --- availability / extract -------------------------------------------------
 
+def _snap(ing, raw, rend="2026-07-05"):
+    s = data.Snapshot(values={date(2026, 7, 1): 1.0})
+    s.ingested.add(ing)
+    s.offsets.add(data.writer_offset_minutes(ing, raw))
+    s.realtime_ends.add(rend)
+    return s
+
+
 def test_availability_rules():
     t = datetime(2026, 7, 4, 9, 0)
-    runs = [data.Run("a", t, t + timedelta(minutes=20), "ok"),
-            data.Run("b", t + timedelta(minutes=1), t + timedelta(minutes=40), "ok"),
-            data.Run("c", t - timedelta(hours=2), t - timedelta(hours=1), "error")]
-    assert data.availability(t + timedelta(minutes=5), runs) == (t + timedelta(minutes=40), "b")
-    assert data.availability(t - timedelta(minutes=90), runs) == (None, None)   # error run only
-    assert data.availability(t + timedelta(hours=5), runs) == (None, None)      # no run
-    assert data.availability(None, runs) == (None, None)
+    ing = t + timedelta(minutes=5, microseconds=5)
+    raw = "series_DCOILWTICO_2026-07-04T13-05-00Z.json"           # EDT: local = UTC - 4h
+    ok = data.Run("a", t, t + timedelta(minutes=20), "ok", frozenset({"DCOILWTICO"}))
+    other = data.Run("b", t, t + timedelta(minutes=40), "ok", frozenset({"DHHNGSP"}))
+    err = data.Run("c", t, t + timedelta(minutes=30), "error", frozenset({"DCOILWTICO"}))
+    at, rid, why = data.availability(_snap(ing, raw), "DCOILWTICO", [ok, other, err])
+    assert (at, rid, why) == (datetime(2026, 7, 4, 13, 20, tzinfo=timezone.utc), "a", None)
+    # partial success: series not listed by the ok run -> uncertain
+    assert data.availability(_snap(ing, raw), "DCOILWTICO", [other, err])[2].startswith("no successful")
+    # overlapping ok runs that both list the series -> ambiguous, not "latest wins"
+    ok2 = data.Run("d", t - timedelta(minutes=1), t + timedelta(minutes=50), "ok", frozenset({"DCOILWTICO"}))
+    assert data.availability(_snap(ing, raw), "DCOILWTICO", [ok, ok2])[2].startswith("ambiguous")
+    # no raw UTC proof -> uncertain
+    assert data.availability(_snap(ing, "x.json"), "DCOILWTICO", [ok])[2].startswith("row without")
+    # rows from two fetches -> uncertain
+    s = _snap(ing, raw)
+    s.ingested.add(ing + timedelta(minutes=1))
+    assert data.availability(s, "DCOILWTICO", [ok])[2].startswith("rows from 2")
+    # two realtime_end values -> uncertain
+    s = _snap(ing, raw)
+    s.realtime_ends.add("2026-07-06")
+    assert data.availability(s, "DCOILWTICO", [ok])[2].startswith("multiple realtime_end")
 
 
-def test_extract_deterministic_and_readonly(built):
+def test_writer_offset_dst():
+    assert data.writer_offset_minutes(datetime(2026, 10, 31, 9, 5, 0, 500), "s_2026-10-31T13-05-00Z.json") == -240
+    assert data.writer_offset_minutes(datetime(2026, 11, 7, 9, 5, 0, 500), "s_2026-11-07T14-05-00Z.json") == -300
+    assert data.writer_offset_minutes(datetime(2026, 11, 7, 9, 5, 30), "s_2026-11-07T14-05-00Z.json") is None
+
+
+def test_issuance_named_zone_dst():
+    assert replay.issuance(date(2026, 10, 31)) == datetime(2026, 10, 31, 16, 0, tzinfo=timezone.utc)
+    assert replay.issuance(date(2026, 11, 7)) == datetime(2026, 11, 7, 17, 0, tzinfo=timezone.utc)
+
+
+def test_extract_deterministic_readonly_and_verified(built, tmp_path):
     obs, runs, _ = make_rows()
-    a = data.to_csv_bytes(obs, [(r, s, e, st) for r, s, e, st in runs])
-    b = data.to_csv_bytes(list(reversed(obs)), list(reversed([(r, s, e, st) for r, s, e, st in runs])))
-    assert a == b
+    assert data.to_csv_bytes(obs, runs) == data.to_csv_bytes(obs[::-1], runs[::-1])
     before = hashlib.sha256(built["wh"].read_bytes()).hexdigest()
     assert data.extract_from_warehouse(built["wh"]) == built["blob"]
     assert hashlib.sha256(built["wh"].read_bytes()).hexdigest() == before
-    assert b"other_source" not in built["blob"] and b"1.0," not in built["blob"].split(b"\n")[1]
-
-
-def test_extract_roundtrip_and_reconcile(built, tmp_path):
+    assert b"other_source" not in built["blob"] and b"/home/x" not in built["blob"]
     path, sha = data.write_extract(built["blob"], tmp_path)
-    assert path.name == f"{sha}.csv" and path.read_bytes() == built["blob"]
+    assert data.read_extract(path) == (built["blob"], sha)
+    bad = tmp_path / ("0" * 64 + ".csv")
+    bad.write_bytes(built["blob"])
+    with pytest.raises(RuntimeError):
+        data.read_extract(bad)
+
+
+def test_reconcile_and_partial_runs(built):
     p = built["panel"]
     assert p.snaps["wti"][UNCERTAIN_RT].available_at is None
-    assert p.snaps["wti"][date(2026, 7, 4)].available_at == datetime(2026, 7, 4, 9, 20)
+    assert p.snaps["hh"][PARTIAL_RT].available_at is None
+    assert p.snaps["wti"][PARTIAL_RT].available_at == datetime(2026, 8, 1, 13, 20, tzinfo=timezone.utc)
+    assert p.snaps["wti"][date(2026, 11, 7)].available_at == datetime(2026, 11, 7, 14, 20, tzinfo=timezone.utc)
     rec = data.reconcile(p)
     assert [od for od, _ in rec["wti"]["changed"]] == [date(2026, 6, 1)]
-    assert rec["brent"]["changed"] == [] and rec["wti"]["uncertain"] == [UNCERTAIN_RT]
-    assert "UNCERTAIN" in data.format_reconciliation(rec, p)
+    assert rec["hh"]["uncertain"] == [UNCERTAIN_RT, PARTIAL_RT]
+    assert "UNCERTAIN (no successful run" in data.format_reconciliation(rec, p)
 
 
 # --- replay ------------------------------------------------------------------
 
-def test_expected_steps():
-    assert replay.expected_steps(date(2026, 11, 3), date(2026, 11, 7), weekly=False) == 3
-    assert replay.expected_steps(date(2026, 10, 26), date(2026, 11, 7), weekly=True) == 1
-
-
 def test_info_set_never_future_or_uncertain(built):
     p = built["panel"]
-    o = date(2026, 7, 11)                     # snapshot that day has no proven availability
-    rt, _ = replay.info_snapshot(p.snaps["wti"], replay.issuance(o))
+    rt, _ = replay.info_snapshot(p.snaps["wti"], replay.issuance(UNCERTAIN_RT))
     assert rt == date(2026, 7, 4)
-    rt, _ = replay.info_snapshot(p.snaps["wti"], datetime(2026, 7, 4, 9, 19))
-    assert rt == date(2026, 6, 27)            # completion 09:20 is after issuance 09:19
+    rt, _ = replay.info_snapshot(p.snaps["wti"], datetime(2026, 7, 4, 13, 19, tzinfo=timezone.utc))
+    assert rt == date(2026, 6, 27)
 
 
 def test_staleness_excludes_gap_origins(built):
@@ -192,36 +244,83 @@ def test_staleness_excludes_gap_origins(built):
     assert series is None and rt == date(2026, 4, 22) and why.startswith("stale")
 
 
-def test_replay_causal(built):
-    """Observed forecasts do not change when every later snapshot is removed."""
+def _cut(p, iss):
+    return data.Panel(snaps={k: {rt: s for rt, s in ss.items()
+                                 if s.available_at is not None and s.available_at <= iss}
+                             for k, ss in p.snaps.items()}, runs=p.runs)
+
+
+def test_forecast_and_target_identity_causal(built):
+    """Forecast, target date, m, forecast id and seal membership are unchanged when
+    every later snapshot is removed."""
     p = built["panel"]
     recs = {(r.origin, r.cell_id, r.baseline): r for r in built["recs"] if r.group == "observed"}
-    for origin in (date(2026, 7, 18), date(2026, 9, 5)):
-        iss = replay.issuance(origin)
-        cut = data.Panel(snaps={k: {rt: s for rt, s in ss.items()
-                                    if s.available_at is not None and s.available_at <= iss}
-                                for k, ss in p.snaps.items()}, runs=p.runs)
-        for cell in spec.CELLS:
-            for r in replay._cell_records(cut, cell, origin, "observed", False):
-                full = recs[(origin, cell.cell_id, r.baseline)]
-                assert (r.status, r.quantiles, r.anchor_date, r.m) == \
-                       (full.status, full.quantiles, full.anchor_date, full.m)
+    for origin in (date(2026, 7, 18), date(2026, 8, 8), date(2026, 9, 12)):
+        cut = _cut(p, replay.issuance(origin))
+        for r in replay.issue(cut, origin):
+            full = recs[(origin, r.cell_id, r.baseline)]
+            assert (r.status, r.quantiles, r.anchor_date, r.m, r.target_date, r.forecast_id) == \
+                   (full.status, full.quantiles, full.anchor_date, full.m, full.target_date,
+                    full.forecast_id)
+            assert full.sealed == (origin in spec.SEALED_ORIGINS)
 
 
-def test_targets_strictly_after_issuance_and_first_seen(built):
-    recs = [r for r in built["recs"] if r.group == "observed"]
-    assert recs and all(r.status != "ok" or r.maturity != "mature" or r.target_date > r.origin
-                        for r in recs)
-    w = [r for r in recs if r.cell_id == "wti_r1" and r.baseline == "B0" and r.maturity == "mature"]
-    r = w[0]
-    assert r.target_date == min(d for d in built["truth"]["DCOILWTICO"] if d > r.origin)
-    assert r.k_realized == r.m                # no holidays in the synthetic calendar
+def test_missing_print_is_not_retargeted(built):
+    """The 1-day target from origin 09-05 is the holiday 09-07: it stays 09-07 and is
+    marked missing instead of moving to 09-08."""
+    p = built["panel"]
+    r = replay.cell_records(p, _cell("wti_r1"), date(2026, 9, 5), "observed",
+                            settle=True, cutoff=data.as_of(p))[0]
+    assert r.target_date == HOLIDAY and r.maturity == "missing" and r.y_first is None
+
+
+def test_rolling_retention_does_not_move_targets(built):
+    """Truncating the newest snapshot (rolling 520-row retention) changes neither the
+    target date nor the first-seen outcome of an old origin."""
+    p = built["panel"]
+    o = date(2025, 11, 1)
+    full = replay.cell_records(p, _cell("wti_r5"), o, "exploratory", settle=True,
+                               cutoff=data.as_of(p))[0]
+    newest = max(p.snaps["wti"])
+    trimmed = {rt: s for rt, s in p.snaps["wti"].items()}
+    old = trimmed[newest]
+    trimmed[newest] = data.Snapshot(values={d: v for d, v in old.values.items() if d >= date(2026, 1, 1)},
+                                    available_at=old.available_at, run_id=old.run_id)
+    p2 = data.Panel(snaps={**p.snaps, "wti": trimmed}, runs=p.runs)
+    again = replay.cell_records(p2, _cell("wti_r5"), o, "exploratory", settle=True,
+                                cutoff=data.as_of(p2))[0]
+    assert full.maturity == "mature" and full.target_date == date(2025, 11, 7)
+    assert (again.target_date, again.y_first) == (full.target_date, full.y_first)
+
+
+def test_targets_after_issuance_and_rv_window(built):
+    recs = [r for r in built["recs"] if r.group == "observed" and r.status == "ok"]
+    assert recs and all(r.target_date > r.origin for r in recs)
     rv = [r for r in recs if r.cell_id == "wti_rv5" and r.maturity == "mature"][0]
     assert rv.target_ref_start <= rv.origin < rv.target_ref_end and rv.y_first > 0
-    # issuance 11-07 12:00 is after the last proven availability (09:20): not an origin yet
-    assert max(r.origin for r in recs) == date(2026, 10, 31)
-    last = {r.cell_id: r.maturity for r in recs if r.origin == date(2026, 10, 31) and r.status == "ok"}
-    assert last["wti_r1"] == "mature" and last["wti_r5"] == "immature"
+
+
+def test_outcome_requires_every_component_proven():
+    cut = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    T = date(2026, 7, 6)
+    at = datetime(2026, 7, 11, tzinfo=timezone.utc)
+    proven = data.Snapshot(values={T: 80.0, date(2026, 7, 7): 81.0}, available_at=at)
+    cell = _cell("spread_d1")
+    pl = {"target": T, "window": [T], "gap": 0, "m": 1}
+    p = data.Panel(snaps={"wti": {date(2026, 7, 11): proven},
+                          "brent": {date(2026, 7, 11): data.Snapshot(values={T: 85.0})},
+                          "hh": {}, "gas": {}})
+    assert replay.outcome(p, cell, pl, 5.0, cut)["maturity"] == "timing_uncertain"
+    p.snaps["brent"] = {date(2026, 7, 11): data.Snapshot(values={date(2026, 7, 8): 1.0}, available_at=at)}
+    assert replay.outcome(p, cell, pl, 5.0, cut)["maturity"] == "missing"
+    p.snaps["brent"] = {}
+    assert replay.outcome(p, cell, pl, 5.0, cut)["maturity"] == "immature"
+    p.snaps["brent"] = {date(2026, 7, 11): data.Snapshot(values={T: 86.0}, available_at=at)}
+    oc = replay.outcome(p, cell, pl, 5.0, cut)
+    assert oc["maturity"] == "mature" and oc["y_first"] == pytest.approx(1.0)
+    assert oc["target_released_at"] == at
+    # a component available only after the scoring cutoff is not mature
+    assert replay.outcome(p, cell, pl, 5.0, at - timedelta(seconds=1))["maturity"] == "immature"
 
 
 def test_spread_uses_common_dates():
@@ -230,14 +329,23 @@ def test_spread_uses_common_dates():
     assert replay.align(a, b) == [(date(2026, 1, 2), 3.0)]
 
 
-def test_origins_fixed_rules(built):
-    exp, obs, sealed = replay.build_origins(built["panel"])
-    assert all(o.weekday() == 5 for o in exp + obs)
-    assert exp[-1] < spec.FIRST_SNAPSHOT <= obs[0]
-    assert len(sealed) == spec.SEAL_ORIGINS and max(sealed) == obs[-1]
+def test_calendar_plan():
+    pl = replay.plan(_cell("wti_r1"), date(2026, 11, 3), date(2026, 11, 7))
+    assert (pl["gap"], pl["m"], pl["target"]) == (3, 4, date(2026, 11, 9))
+    pl = replay.plan(_cell("gas_w4"), date(2026, 10, 26), date(2026, 11, 7))
+    assert (pl["gap"], pl["target"]) == (1, date(2026, 11, 30))
+    pl = replay.plan(_cell("wti_rv5"), date(2026, 11, 5), date(2026, 11, 7))
+    assert pl["window"][0] == date(2026, 11, 6) and pl["window"][-1] == date(2026, 11, 13)
 
 
-# --- scoring / cli -----------------------------------------------------------
+def test_seal_fixed_by_calendar(built):
+    assert len(spec.SEALED_ORIGINS) == 13 and spec.SEALED_ORIGINS[-1] == date(2026, 11, 7)
+    sealed = [r for r in built["recs"] if r.sealed]
+    assert sealed and all(r.y_first is None and r.y_latest is None for r in sealed)
+    assert all(r.maturity == "sealed" for r in sealed if r.status == "ok")
+
+
+# --- scoring -----------------------------------------------------------------
 
 def test_pinball_and_bootstrap():
     assert scoring.pinball(0.9, 1.0, 0.0) == pytest.approx(0.9)
@@ -246,36 +354,91 @@ def test_pinball_and_bootstrap():
     assert scoring.block_bootstrap_ci(xs) == scoring.block_bootstrap_ci(xs)
     lo, hi = scoring.block_bootstrap_ci(xs)
     assert lo <= sum(xs) / len(xs) <= hi
+    assert scoring.overlap_origins(_cell("gas_w4")) == 4
 
 
-def test_summarize_counts(built):
+def test_summarize_counts_and_seal(built):
     rows = scoring.summarize(built["recs"])
-    assert rows
     for r in rows:
-        assert r["n_origins"] == (r["n_scored"] + r["n_excluded"] + r["n_abstain"]
-                                  + r["n_immature"] + r["n_unscorable"])
+        assert r["n_origins"] == sum(r[k] for k in (
+            "n_scored", "n_excluded", "n_abstain", "n_immature", "n_unscorable", "n_missing",
+            "n_timing_uncertain", "n_sealed"))
+        if r["sealed"]:
+            assert r["n_scored"] == 0 and "mean_pinball" not in r
 
 
-def test_forecast_refuses_until_frozen(built, tmp_path, capsys):
-    assert spec.SPEC_FROZEN is False
-    rc = run.main(["forecast", "--warehouse", str(built["wh"]), "--workdir", str(tmp_path)])
-    assert rc == 2 and not (tmp_path / "ledger.duckdb").exists()
+# --- CLI / ledger ------------------------------------------------------------
+
+def test_gates_refuse(built, tmp_path, monkeypatch):
+    args = ["--warehouse", str(built["wh"]), "--workdir", str(tmp_path)]
+    for cmd in ("backtest", "issue", "settle"):
+        assert run.main([cmd, *args]) == 2
+    monkeypatch.setattr(spec, "SPEC_FROZEN", True)
+    monkeypatch.setattr(run, "code_identity", lambda: {
+        "code_tree_sha256": "t", "code_head": "abc", "code_dirty": True})
+    assert run.main(["backtest", *args]) == 2
+    assert not (tmp_path / "ledger.duckdb").exists()
 
 
 def test_reconcile_writes_no_forecasts(built, tmp_path):
     assert run.main(["reconcile", "--warehouse", str(built["wh"]), "--workdir", str(tmp_path)]) == 0
     assert not (tmp_path / "ledger.duckdb").exists()
     rep = next((tmp_path / "reports").iterdir()).read_text()
-    assert "Origin eligibility" in rep and "observed usable=" in rep
+    assert "Origin eligibility" in rep and "observed usable=" in rep and "writer_offset_min=-240" in rep
+    extract = next((tmp_path / "inputs").iterdir())
+    assert run.main(["reconcile", "--extract", str(extract), "--workdir", str(tmp_path / "b")]) == 0
 
 
-def test_forecast_mode_writes_ledger_when_frozen(built, tmp_path, monkeypatch):
-    monkeypatch.setattr(spec, "SPEC_FROZEN", True)
-    assert run.main(["forecast", "--warehouse", str(built["wh"]), "--workdir", str(tmp_path)]) == 0
+def test_backtest_and_one_time_holdout_release(built, tmp_path, frozen):
     import duckdb
+    args = ["backtest", "--warehouse", str(built["wh"]), "--workdir", str(tmp_path)]
+    assert run.main(args) == 0
+    assert run.main([*args, "--release-holdout"]) == 0
+    assert run.main([*args, "--release-holdout"]) == 2
     con = duckdb.connect(str(tmp_path / "ledger.duckdb"), read_only=True)
     try:
-        assert con.execute("SELECT count(*) FROM forecasts").fetchone()[0] > 0
-        assert con.execute("SELECT count(*) FROM runs").fetchone()[0] == 1
+        rows = con.execute(
+            "SELECT r.started_utc, count(f.y_first) FROM backtest_forecasts f JOIN runs r USING (run_id) "
+            "WHERE f.sealed GROUP BY 1 ORDER BY 1").fetchall()
+        assert rows[0][1] == 0 and rows[1][1] > 0
+        assert con.execute("SELECT count(*) FROM holdout_releases").fetchone()[0] == 1
+        assert con.execute("SELECT count(*) FROM backtest_scores WHERE sealed AND "
+                           "summary LIKE '%mean_pinball%' AND run_id = (SELECT run_id FROM runs "
+                           "ORDER BY started_utc LIMIT 1)").fetchone()[0] == 0
     finally:
         con.close()
+
+
+def test_forward_issue_immutable_and_settle(built, tmp_path, frozen, monkeypatch):
+    import duckdb
+    origin = date(2026, 10, 17)
+    cutoff = replay.issuance(origin)
+    obs, runs, _ = make_rows()
+    early = tmp_path / "early.duckdb"
+    _write_warehouse(early, [o for o in obs if o[3] <= origin], [r for r in runs if r[1].date() <= origin])
+    monkeypatch.setattr(run, "_now", lambda: cutoff + timedelta(hours=1))
+    led = tmp_path / "ledger.duckdb"
+    base = ["--workdir", str(tmp_path), "--ledger", str(led)]
+    assert run.main(["issue", "--warehouse", str(early), *base]) == 0
+    assert run.main(["issue", "--warehouse", str(early), *base]) == 2               # immutable
+    assert run.main(["issue", "--origin", "2026-10-24", "--warehouse", str(early), *base]) == 2  # future
+    monkeypatch.setattr(run, "_now", lambda: datetime(2026, 11, 8, tzinfo=timezone.utc))
+    assert run.main(["settle", "--warehouse", str(built["wh"]), *base]) == 0
+    assert run.main(["settle", "--warehouse", str(built["wh"]), *base]) == 0        # no duplicates
+    con = duckdb.connect(str(led), read_only=True)
+    try:
+        n, late = con.execute("SELECT count(*), bool_or(late) FROM forward_forecasts").fetchone()
+        assert n == sum(len(replay.BASELINES[c.kind]) for c in spec.CELLS) and late is True
+        outs = dict(con.execute("SELECT maturity, count(*) FROM forward_outcomes GROUP BY 1").fetchall())
+        assert outs.get("mature", 0) > 0
+        assert con.execute("SELECT count(*), count(DISTINCT forecast_id) FROM forward_outcomes").fetchone()[0] \
+            == sum(outs.values())
+        q, tgt = con.execute("SELECT quantiles, target_date FROM forward_forecasts "
+                             "WHERE cell_id='wti_r1' AND baseline='B0'").fetchone()
+    finally:
+        con.close()
+    rep = next(r for r in built["recs"] if r.origin == origin
+               and r.cell_id == "wti_r1" and r.baseline == "B0")
+    import json
+    assert tgt == rep.target_date and json.loads(q) == {str(k): v for k, v in rep.quantiles.items()}
+    assert json.loads(q)["0.5"] == 0.0

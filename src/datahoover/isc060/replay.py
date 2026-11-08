@@ -1,36 +1,42 @@
-"""Origins, information sets, baseline forecasts and first-seen outcomes.
+"""Origins, information sets, baseline forecasts, issue-time target calendar, outcomes.
 
-Information contract (FA-008 as amended for AB-005):
-  * issuance = Saturday ``spec.ISSUANCE_TIME`` in the ingest host's local clock
-    (the same clock that wrote ``ingested_at`` / ``ingest_runs``). The cutoff is
-    fixed: a skipped or late ingest never moves an origin, it only makes the
-    replayed snapshot older, and the staleness rule then excludes it;
-  * observed group: latest snapshot with a proven ``available_at <= issuance``;
-    timestamp-uncertain snapshots are never used; > STALE_DAYS old => excluded;
+Information contract (FA-008 as amended for AB-005/AB-006):
+  * issuance = Saturday ``spec.ISSUANCE_TIME`` in ``spec.ISSUANCE_TZ``, compared as
+    aware UTC against proven snapshot availability (data.py). A late or skipped
+    ingest never moves an origin; it only makes the snapshot older, and the
+    staleness rule then excludes it;
+  * observed group: latest snapshot proven available at or before issuance;
+    uncertain snapshots are never used; > STALE_DAYS old => excluded;
   * exploratory group (before FIRST_SNAPSHOT): retrospective exploratory
     reconstruction from latest values (newest snapshot holding each date) with
-    G0b-median age masks. The masks
-    were chosen with the full later audit; no claim is made from this group;
-  * targets are strictly after issuance; the forecast uses the *expected* step
-    count m = gap + h from a weekday (or weekly) calendar known at issuance, and
-    the ledger records the realized k.
+    G0b-median age masks. No claim is made from this group;
+  * forward group: ``issue()`` for one explicit origin; stored insert-only by run.py;
+  * targets are fixed at issue time from a calendar (weekdays for daily series,
+    the anchor's weekly cadence for gasoline). They are never re-chosen from later
+    data: an absent label is recorded as ``missing``, not shifted;
+  * an outcome is ``mature`` only if every component date has a proven first-seen
+    availability at or before the scoring cutoff. First-seen = the earliest
+    snapshot *proven available* that holds the date.
 """
 
 from __future__ import annotations
 
+import hashlib
 import math
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from . import baselines as bl
 from . import spec
-from .data import Panel, Snapshot
+from .data import Panel, Snapshot, as_of
 
 Series = list[tuple[date, float]]
 
 
 def issuance(origin: date) -> datetime:
-    return datetime.combine(origin, spec.ISSUANCE_TIME)
+    local = datetime.combine(origin, spec.ISSUANCE_TIME, tzinfo=ZoneInfo(spec.ISSUANCE_TZ))
+    return local.astimezone(timezone.utc)
 
 
 def saturdays(start: date, end: date) -> list[date]:
@@ -51,46 +57,16 @@ def info_snapshot(snaps: dict[date, Snapshot], iss: datetime):
     return rt, snaps[rt]
 
 
-def latest_snapshot(snaps: dict[date, Snapshot]) -> Snapshot | None:
-    return snaps[max(snaps)] if snaps else None
-
-
-def as_series(values: dict[date, float], upto: date | None = None) -> Series:
-    return sorted((d, v) for d, v in values.items() if upto is None or d <= upto)
-
-
-def expected_steps(anchor: date, upto: date, weekly: bool) -> int:
-    """Observations expected in (anchor, upto]: weekdays, or same-weekday weeks."""
-    n, d = 0, anchor + timedelta(days=1)
-    while d <= upto:
-        if (weekly and d.weekday() == anchor.weekday()) or (not weekly and d.weekday() < 5):
-            n += 1
-        d += timedelta(days=1)
-    return n
-
-
-def first_seen(snaps: dict[date, Snapshot], od: date):
-    """(value, realtime_start, available_at) from the earliest snapshot holding ``od``."""
-    for rt in sorted(snaps):
-        if od in snaps[rt].values:
-            return snaps[rt].values[od], rt, snaps[rt].available_at
-    return None, None, None
-
-
 def latest_values(snaps: dict[date, Snapshot]) -> dict[date, float]:
-    """Each date's value from the newest snapshot holding it (snapshots hold 520 obs,
-    so older snapshots reach further back)."""
+    """Each date's value from the newest snapshot holding it (exploratory only)."""
     out: dict[date, float] = {}
     for rt in sorted(snaps):
         out.update(snaps[rt].values)
     return out
 
 
-def latest_value(snaps: dict[date, Snapshot], od: date):
-    for rt in sorted(snaps, reverse=True):
-        if od in snaps[rt].values:
-            return snaps[rt].values[od]
-    return None
+def as_series(values: dict[date, float], upto: date | None = None) -> Series:
+    return sorted((d, v) for d, v in values.items() if upto is None or d <= upto)
 
 
 def align(a: Series, b: Series) -> Series:
@@ -98,6 +74,128 @@ def align(a: Series, b: Series) -> Series:
     da = dict(a)
     return [(d, v - da[d]) for d, v in b if d in da]
 
+
+# --- issue-time calendar ------------------------------------------------------
+
+def _weekdays_after(d: date, n: int) -> list[date]:
+    out = []
+    while len(out) < n:
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            out.append(d)
+    return out
+
+
+def _last_weekday_on_or_before(d: date) -> date:
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def plan(cell, anchor: date, origin: date) -> dict:
+    """gap, m, target date and component window, fixed from the calendar at issue."""
+    if cell.kind == "weekly_logret":
+        gap = (origin - anchor).days // 7
+        target = anchor + timedelta(weeks=gap + cell.h)
+        return {"gap": gap, "m": gap + cell.h, "target": target, "window": [target]}
+    t0 = _last_weekday_on_or_before(origin)
+    gap = sum(1 for _ in _iter_weekdays(anchor, t0))
+    if cell.kind == "rv":
+        window = [t0] + _weekdays_after(t0, spec.RV_DAYS)
+        return {"gap": gap, "m": gap + spec.RV_DAYS, "target": window[-1], "window": window}
+    target = _weekdays_after(t0, cell.h)[-1]
+    return {"gap": gap, "m": gap + cell.h, "target": target, "window": [target]}
+
+
+def _iter_weekdays(after: date, upto: date):
+    d = after + timedelta(days=1)
+    while d <= upto:
+        if d.weekday() < 5:
+            yield d
+        d += timedelta(days=1)
+
+
+# --- outcomes -----------------------------------------------------------------
+
+def proven_first_seen(snaps: dict[date, Snapshot], od: date, cutoff: datetime):
+    """(value, available_at) from the earliest proven-available snapshot holding od."""
+    best = None
+    for rt in sorted(snaps):
+        s = snaps[rt]
+        if od in s.values and s.available_at is not None and s.available_at <= cutoff:
+            if best is None or s.available_at < best[1]:
+                best = (s.values[od], s.available_at)
+    return best
+
+
+def proven_latest(snaps: dict[date, Snapshot], od: date, cutoff: datetime):
+    for rt in sorted(snaps, reverse=True):
+        s = snaps[rt]
+        if od in s.values and s.available_at is not None and s.available_at <= cutoff:
+            return s.values[od]
+    return None
+
+
+def component_state(snaps: dict[date, Snapshot], od: date, cutoff: datetime) -> str:
+    if proven_first_seen(snaps, od, cutoff):
+        return "ok"
+    if any(od in s.values and s.available_at is None for s in snaps.values()):
+        return "timing_uncertain"   # stored, but never proven available
+    covered = any(s.available_at is not None and s.available_at <= cutoff
+                  and (s.values or s.missing) and max([*s.values, *s.missing]) > od
+                  for s in snaps.values())
+    return "missing" if covered else "immature"
+
+
+_STATE_ORDER = ("immature", "missing", "timing_uncertain")
+
+
+def outcome(panel: Panel, cell, pl: dict, anchor_value: float, cutoff: datetime | None) -> dict:
+    keys = ("wti", "brent") if cell.kind == "spread" else (cell.key,)
+    comps = [(k, d) for k in keys for d in pl["window"]]
+    out = {"target_date": pl["target"], "target_ref_start": pl["window"][0],
+           "target_ref_end": pl["window"][-1]}
+    if cutoff is None:
+        return {**out, "maturity": "immature"}
+    states = {component_state(panel.snaps[k], d, cutoff) for k, d in comps}
+    for st in _STATE_ORDER:
+        if st in states:
+            return {**out, "maturity": st}
+    first = {(k, d): proven_first_seen(panel.snaps[k], d, cutoff) for k, d in comps}
+    latest = {(k, d): proven_latest(panel.snaps[k], d, cutoff) for k, d in comps}
+    out["target_released_at"] = max(a for _, a in first.values())
+    out["k_realized"] = None
+    ys = {}
+    for tag, val in (("y_first", lambda c: first[c][0]), ("y_latest", lambda c: latest[c])):
+        if cell.kind == "spread":
+            t = pl["target"]
+            ys[tag] = (val(("brent", t)) - val(("wti", t))) - anchor_value
+        elif cell.kind == "rv":
+            px = [val((cell.key, d)) for d in pl["window"]]
+            if any(p <= 0 for p in px):
+                return {**out, "maturity": "unscorable"}
+            ys[tag] = bl._rv([math.log(b / a) for a, b in zip(px, px[1:])])
+        else:
+            v = val((cell.key, pl["target"]))
+            if v <= 0 or anchor_value <= 0:
+                return {**out, "maturity": "unscorable"}
+            ys[tag] = math.log(v / anchor_value)
+    return {**out, **ys, "maturity": "mature"}
+
+
+def realized_steps(panel: Panel, cell, anchor: date, target: date, cutoff) -> int | None:
+    """Observations actually present in (anchor, target], for the ledger only."""
+    snaps = panel.snaps["wti" if cell.kind == "spread" else cell.key]
+    if cutoff is None:
+        return None
+    dates = set()
+    for s in snaps.values():
+        if s.available_at is not None and s.available_at <= cutoff:
+            dates |= {d for d in s.values if anchor < d <= target}
+    return len(dates)
+
+
+# --- records ------------------------------------------------------------------
 
 @dataclass
 class Record:
@@ -108,8 +206,11 @@ class Record:
     status: str                     # ok | abstain | excluded
     reason: str | None = None
     sealed: bool = False
+    forecast_id: str | None = None
+    inputs_sha256: str | None = None
     rt_used: dict = field(default_factory=dict)
     anchor_date: date | None = None
+    anchor_value: float | None = None
     gap: int | None = None
     m: int | None = None
     quantiles: dict | None = None
@@ -120,7 +221,7 @@ class Record:
     k_realized: int | None = None
     y_first: float | None = None
     y_latest: float | None = None
-    maturity: str | None = None      # mature | immature | unscorable
+    maturity: str | None = None      # mature | immature | missing | timing_uncertain | unscorable | sealed
 
 
 BASELINES = {
@@ -131,10 +232,20 @@ BASELINES = {
 }
 
 
+def forecast_id(origin: date, cell_id: str, baseline: str) -> str:
+    key = f"{spec.SPEC_VERSION}|{origin}|{cell_id}|{baseline}"
+    return hashlib.sha256(key.encode()).hexdigest()[:20]
+
+
+def _inputs_sha(series: Series, rt_used: dict) -> str:
+    blob = repr((sorted((k, str(v)) for k, v in rt_used.items()), series)).encode()
+    return hashlib.sha256(blob).hexdigest()
+
+
 def _info(panel: Panel, key: str, origin: date, group: str):
-    """(series, rt_used, reason). Observed: snapshot replay. Exploratory: masked latest."""
+    """(series, rt_used, reason). Observed/forward: proven replay. Exploratory: masked latest."""
     snaps = panel.snaps[key]
-    if group == "observed":
+    if group in ("observed", "forward"):
         rt, snap = info_snapshot(snaps, issuance(origin))
         if snap is None:
             return None, None, "no snapshot with proven availability"
@@ -147,10 +258,10 @@ def _info(panel: Panel, key: str, origin: date, group: str):
     return as_series(latest_values(snaps), cutoff), max(snaps), None
 
 
-def _forecast(cell, series: Series, gap: int) -> dict:
-    m = gap + cell.h
+def _forecast(cell, series: Series, pl: dict) -> dict:
+    m = pl["m"]
     if cell.kind == "rv":
-        return bl.rv_baselines(series, gap)
+        return bl.rv_baselines(series, pl["gap"])
     out = {"B0": bl.b0_empirical(series, m, log=cell.kind != "spread")}
     if cell.kind in ("logret", "weekly_logret"):
         out["B1"] = bl.b1_gaussian_ewma(series, m)
@@ -159,89 +270,11 @@ def _forecast(cell, series: Series, gap: int) -> dict:
     return out
 
 
-def _outcome(panel: Panel, cell, origin: date, anchor: date, anchor_value: float) -> dict:
-    """First-seen and latest realized target; strictly after issuance date."""
-    if cell.kind == "spread":
-        w, b = panel.snaps["wti"], panel.snaps["brent"]
-        lw, lb = latest_snapshot(w), latest_snapshot(b)
-        if lw is None or lb is None:
-            return {"maturity": "immature"}
-        dates = sorted(set(lw.values) & set(lb.values))
-    else:
-        snaps = panel.snaps[cell.key]
-        ls = latest_snapshot(snaps)
-        if ls is None:
-            return {"maturity": "immature"}
-        dates = sorted(ls.values)
-    after = [d for d in dates if d > origin]
-    if len(after) < cell.h:
-        return {"maturity": "immature"}
-    target = after[cell.h - 1]
-    k_real = sum(1 for d in dates if anchor < d <= target)
-    out = {"target_date": target, "k_realized": k_real,
-           "target_ref_start": target, "target_ref_end": target}
-
-    if cell.kind == "spread":
-        (vw, _, aw), (vb, _, ab) = first_seen(w, target), first_seen(b, target)
-        out["target_released_at"] = max(x for x in (aw, ab) if x) if (aw or ab) else None
-        out["y_first"] = (vb - vw) - anchor_value
-        out["y_latest"] = (latest_value(b, target) - latest_value(w, target)) - anchor_value
-    elif cell.kind == "rv":
-        before = [d for d in dates if d <= origin]
-        if not before:
-            return {"maturity": "unscorable"}
-        window = [before[-1]] + after[: spec.RV_DAYS]
-        out["target_ref_start"], out["target_ref_end"] = window[0], window[-1]
-        for tag, getter in (("y_first", lambda d: first_seen(snaps, d)[0]),
-                            ("y_latest", lambda d: latest_value(snaps, d))):
-            px = [getter(d) for d in window]
-            if any(p is None or p <= 0 for p in px):
-                return {**out, "maturity": "unscorable"}
-            rets = [math.log(b_ / a_) for a_, b_ in zip(px, px[1:])]
-            out[tag] = bl._rv(rets)
-        out["target_released_at"] = first_seen(snaps, target)[2]
-    else:
-        v, _, avail = first_seen(snaps, target)
-        vl = latest_value(snaps, target)
-        if v <= 0 or vl <= 0 or anchor_value <= 0:
-            return {**out, "maturity": "unscorable"}
-        out["target_released_at"] = avail
-        out["y_first"] = math.log(v / anchor_value)
-        out["y_latest"] = math.log(vl / anchor_value)
-    out["maturity"] = "mature"
-    return out
-
-
-def build_origins(panel: Panel):
-    """(exploratory origins, observed origins, sealed set) with fixed rules."""
-    wti = latest_values(panel.snaps["wti"])
-    if not wti:
-        return [], [], set()
-    avail = [s.available_at for ss in panel.snaps.values() for s in ss.values() if s.available_at]
-    if not avail:
-        return [], [], set()
-    as_of = max(avail)
-    first_obs = min(wti)
-    exp = saturdays(first_obs + timedelta(weeks=spec.BURN_IN_WEEKS),
-                    spec.FIRST_SNAPSHOT - timedelta(days=1))
-    obs = [o for o in saturdays(spec.FIRST_SNAPSHOT, as_of.date()) if issuance(o) <= as_of]
-    sealed = set(obs[-spec.SEAL_ORIGINS:])
-    return exp, obs, sealed
-
-
-def replay(panel: Panel) -> list[Record]:
-    exp, obs, sealed = build_origins(panel)
-    out: list[Record] = []
-    for group, origins in (("exploratory", exp), ("observed", obs)):
-        for origin in origins:
-            for cell in spec.CELLS:
-                out.extend(_cell_records(panel, cell, origin, group, origin in sealed))
-    return out
-
-
-def _cell_records(panel: Panel, cell, origin: date, group: str, sealed: bool) -> list[Record]:
+def cell_records(panel: Panel, cell, origin: date, group: str, *, settle: bool,
+                 cutoff: datetime | None, sealed: bool = False) -> list[Record]:
     names = BASELINES[cell.kind]
     base = dict(origin=origin, group=group, cell_id=cell.cell_id, sealed=sealed)
+    ids = {n: forecast_id(origin, cell.cell_id, n) for n in names}
     if cell.kind == "spread":
         sw, rw, ew = _info(panel, "wti", origin, group)
         sb, rb, eb = _info(panel, "brent", origin, group)
@@ -254,16 +287,70 @@ def _cell_records(panel: Panel, cell, origin: date, group: str, sealed: bool) ->
     if reason is None and not series:
         reason = "empty info set"
     if reason is not None:
-        return [Record(**base, baseline=n, status="excluded", reason=reason, rt_used=rt_used)
-                for n in names]
+        return [Record(**base, baseline=n, forecast_id=ids[n], status="excluded", reason=reason,
+                       rt_used=rt_used) for n in names]
     anchor, anchor_value = series[-1]
-    gap = expected_steps(anchor, origin, weekly=cell.kind == "weekly_logret")
-    fc = _forecast(cell, series, gap)
-    oc = _outcome(panel, cell, origin, anchor, anchor_value)
+    pl = plan(cell, anchor, origin)
+    fc = _forecast(cell, series, pl)
+    oc = {"target_date": pl["target"], "target_ref_start": pl["window"][0],
+          "target_ref_end": pl["window"][-1]}
+    if sealed:
+        oc["maturity"] = "sealed"
+    elif settle:
+        oc = outcome(panel, cell, pl, anchor_value, cutoff)
+        oc["k_realized"] = realized_steps(panel, cell, anchor, pl["target"], cutoff)
+    inputs = _inputs_sha(series, rt_used)
     recs = []
     for n in names:
         qs, why = fc[n]
-        recs.append(Record(**base, baseline=n, status="ok" if qs else "abstain", reason=why,
-                           rt_used=rt_used, anchor_date=anchor, gap=gap, m=gap + cell.h,
-                           quantiles=qs, **oc))
+        recs.append(Record(**base, baseline=n, forecast_id=ids[n], inputs_sha256=inputs,
+                           status="ok" if qs else "abstain", reason=why, rt_used=rt_used,
+                           anchor_date=anchor, anchor_value=anchor_value, gap=pl["gap"], m=pl["m"], quantiles=qs, **oc))
     return recs
+
+
+def build_origins(panel: Panel):
+    """(exploratory origins, observed origins) for historical replay, fixed rules."""
+    wti = latest_values(panel.snaps["wti"])
+    cutoff = as_of(panel)
+    if not wti or cutoff is None:
+        return [], []
+    exp = saturdays(min(wti) + timedelta(weeks=spec.BURN_IN_WEEKS),
+                    spec.FIRST_SNAPSHOT - timedelta(days=1))
+    obs = [o for o in saturdays(spec.FIRST_SNAPSHOT, cutoff.date()) if issuance(o) <= cutoff]
+    return exp, obs
+
+
+def replay(panel: Panel, *, release_holdout: bool = False) -> list[Record]:
+    """Historical (exploratory + observed) records. Sealed origins carry no outcome
+    unless ``release_holdout`` (one-time; enforced by the ledger in run.py)."""
+    exp, obs = build_origins(panel)
+    cutoff = as_of(panel)
+    out: list[Record] = []
+    for group, origins in (("exploratory", exp), ("observed", obs)):
+        for origin in origins:
+            sealed = origin in spec.SEALED_ORIGINS and not release_holdout
+            for cell in spec.CELLS:
+                out.extend(cell_records(panel, cell, origin, group, settle=True, cutoff=cutoff,
+                                        sealed=sealed))
+    for r in out:
+        r.sealed = r.origin in spec.SEALED_ORIGINS
+    return out
+
+
+def issue(panel: Panel, origin: date) -> list[Record]:
+    """Forward forecasts for one explicit Saturday origin; no outcomes."""
+    if origin.weekday() != 5:
+        raise ValueError(f"origin {origin} is not a Saturday")
+    out = []
+    for cell in spec.CELLS:
+        out.extend(cell_records(panel, cell, origin, "forward", settle=False, cutoff=None))
+    return out
+
+
+def settle_forward(panel: Panel, origin: date, anchor_date: date, anchor_value: float,
+                   cell_id: str) -> dict:
+    """Outcome for a stored forward forecast; target fixed from its issue-time calendar."""
+    cell = next(c for c in spec.CELLS if c.cell_id == cell_id)
+    pl = plan(cell, anchor_date, origin)
+    return outcome(panel, cell, pl, anchor_value, as_of(panel))

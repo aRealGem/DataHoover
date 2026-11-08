@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, time
+from datetime import date, time, timedelta
 
-SPEC_VERSION = "0.3-draft"
+SPEC_VERSION = "0.4-draft"
 # Forecast mode refuses to run until the spec is frozen on the exchange page
 # and this flag is flipped in a reviewed commit.
 SPEC_FROZEN = False
@@ -42,9 +42,16 @@ FIRST_SNAPSHOT = date(2026, 4, 22)
 # this group carries no promotion, significance or calibration claim.
 EXPLORATORY_AGE_DAYS = {"wti": 4, "brent": 4, "hh": 4, "gas": 5}
 
-# Issuance: Saturday 12:00 in the ingest host clock (the clock that wrote
-# ingested_at and ingest_runs; Run 0 prints it). Fixed: late ingests never move it.
+# Issuance cutoff: every Saturday 12:00 in a NAMED zone, compared as aware UTC.
+# Stored warehouse timestamps are converted per write via the raw_path UTC proof
+# (data.py), so no reader/writer zone is assumed. Late ingests never move an origin.
+ISSUANCE_TZ = "America/New_York"
 ISSUANCE_TIME = time(12, 0)
+
+# Sealed holdout: membership frozen by calendar now, not recomputed on refresh.
+# Outcomes and scores for these origins are not computed until a one-time,
+# ledger-recorded release (run.py backtest --release-holdout).
+SEALED_ORIGINS = tuple(date(2026, 8, 15) + timedelta(weeks=i) for i in range(SEAL_ORIGINS))
 
 
 @dataclass(frozen=True)

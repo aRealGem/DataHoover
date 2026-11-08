@@ -22,13 +22,21 @@ def mean_pinball(qs: dict, y: float) -> float:
     return sum(pinball(q, y, qs[q]) for q in spec.QUANTILES) / len(spec.QUANTILES)
 
 
-def block_bootstrap_ci(xs: list[float], *, b: int = BOOT_B, seed: int = BOOT_SEED,
-                       alpha: float = 0.10) -> tuple[float, float] | None:
-    """Moving-block bootstrap of the mean, block length ceil(n^(1/3)), in origin order."""
+def overlap_origins(cell) -> int:
+    """Consecutive weekly origins whose target windows overlap: h for weekly targets
+    (gas_w4 spans 4 weeks), 1 for daily cells (windows end before the next origin's)."""
+    return cell.h if cell.kind == "weekly_logret" else 1
+
+
+def block_bootstrap_ci(xs: list[float], *, min_block: int = 1, b: int = BOOT_B,
+                       seed: int = BOOT_SEED, alpha: float = 0.10) -> tuple[float, float] | None:
+    """Moving-block bootstrap of the mean in origin order. Block length is predeclared:
+    max(ceil(n^(1/3)), min_block), with min_block = the cell's target overlap.
+    Descriptive only: with few origins it does not repair limited evidence."""
     n = len(xs)
     if n < 2:
         return None
-    blk = max(1, math.ceil(n ** (1 / 3)))
+    blk = min(n, max(1, math.ceil(n ** (1 / 3)), min_block))
     starts = n - blk + 1
     rng = random.Random(seed)
     means = []
@@ -61,12 +69,17 @@ def summarize(records, *, value: str = "y_first") -> list[dict]:
             "n_abstain": sum(r.status == "abstain" for r in rs),
             "n_immature": sum(r.status == "ok" and r.maturity == "immature" for r in rs),
             "n_unscorable": sum(r.status == "ok" and r.maturity == "unscorable" for r in rs),
+            "n_missing": sum(r.status == "ok" and r.maturity == "missing" for r in rs),
+            "n_timing_uncertain": sum(r.status == "ok" and r.maturity == "timing_uncertain" for r in rs),
+            "n_sealed": sum(r.status == "ok" and r.maturity == "sealed" for r in rs),
         }
         if scored:
             ys = [getattr(r, value) for r in scored]
             mp = [mean_pinball(r.quantiles, y) for r, y in zip(scored, ys)]
             row["mean_pinball"] = sum(mp) / len(mp)
-            row["mean_pinball_ci90"] = block_bootstrap_ci(mp)
+            cellspec = next(c for c in spec.CELLS if c.cell_id == cell)
+            row["mean_pinball_ci90_descriptive"] = block_bootstrap_ci(
+                mp, min_block=overlap_origins(cellspec))
             row["pinball_by_q"] = {q: sum(pinball(q, y, r.quantiles[q]) for r, y in zip(scored, ys)) / len(ys)
                                    for q in spec.QUANTILES}
             row["frac_below_q"] = {q: sum(y < r.quantiles[q] for r, y in zip(scored, ys)) / len(ys)

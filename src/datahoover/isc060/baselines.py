@@ -56,8 +56,9 @@ def b0_empirical(series: Series, m: int, *, log: bool = True):
         xs = [vals[i + m] - vals[i] for i in range(len(vals) - m)]
     if len(xs) < spec.B0_MIN_SAMPLES:
         return None, f"B0 samples {len(xs)} < {spec.B0_MIN_SAMPLES}"
-    med = median(xs)
-    return _qs([x - med for x in xs]), None
+    # shift every quantile by the same type-7 median, so q=0.5 is exactly 0.0
+    # (subtracting the median from each sample first leaves float residue)
+    return _qs(xs, shift=-quantile(xs, 0.5)), None
 
 
 def ewma_variance(rets: list[float], lam: float = spec.EWMA_LAMBDA) -> float:
