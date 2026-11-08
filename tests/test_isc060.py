@@ -17,7 +17,8 @@ from datahoover.storage.duckdb_store import init_db
 START = date(2024, 4, 1)
 END = date(2026, 11, 6)
 NY = ZoneInfo("America/New_York")
-HOLIDAY = date(2026, 9, 7)          # no daily prints (Labor Day)
+HOLIDAY = date(2026, 9, 7)          # Labor Day: in spec.US_HOLIDAYS, no prints
+GAP = date(2026, 10, 19)            # scheduled WTI print absent (feed gap) until a backfill
 UNCERTAIN_RT = date(2026, 7, 11)    # no successful run at all
 PARTIAL_RT = date(2026, 8, 1)       # run succeeded but did not fetch DHHNGSP
 IDS = ("DCOILBRENTEU", "DCOILWTICO", "DHHNGSP", "GASREGCOVW")
@@ -55,7 +56,7 @@ def _raw(sid, local_naive):
     return f"/home/x/data/raw/fred/series_{sid}_{utc.strftime('%Y-%m-%dT%H-%M-%SZ')}.json"
 
 
-def make_rows():
+def make_rows(backfill: bool = False):
     days = _bdays(START, END)
     mondays = [d for d in _bdays(date(2016, 1, 4), END) if d.weekday() == 0]
     truth = {
@@ -65,7 +66,8 @@ def make_rows():
         "GASREGCOVW": _prices(4, mondays, 3.0),
     }
     obs, runs = [], []
-    for i, rt in enumerate(_snapshot_dates()):
+    rts = _snapshot_dates() + ([date(2026, 11, 14)] if backfill else [])
+    for i, rt in enumerate(rts):
         t0 = datetime.combine(rt, time(9, 0))            # host-local naive, like the warehouse
         fetched = [s for s in IDS if not (rt == PARTIAL_RT and s == "DHHNGSP")]
         if rt != UNCERTAIN_RT:
@@ -76,6 +78,8 @@ def make_rows():
             lag = 6 if sid == "GASREGCOVW" else 3
             ds = [d for d in sorted(truth[sid]) if d <= rt - timedelta(days=lag)][-520:]
             for d in ds:
+                if sid == "DCOILWTICO" and d == GAP and rt < date(2026, 11, 14):
+                    continue
                 v = truth[sid][d]
                 if sid == "DCOILWTICO" and d == date(2026, 6, 1) and rt >= date(2026, 7, 4):
                     v += 0.25                              # one revision
@@ -191,6 +195,17 @@ def test_availability_rules():
     assert data.availability(s, "DCOILWTICO", [ok])[2].startswith("multiple realtime_end")
 
 
+def test_mixed_offsets_in_one_run_rejected():
+    a, b = data.Snapshot(values={date(2026, 7, 1): 1.0}), data.Snapshot(values={date(2026, 7, 1): 2.0})
+    for s_, off in ((a, -240), (b, -300)):
+        s_.offsets.add(off)
+        s_.available_at, s_.run_id = datetime(2026, 11, 1, tzinfo=timezone.utc), "r"
+    p = data.Panel(snaps={"wti": {date(2026, 11, 1): a}, "brent": {date(2026, 11, 1): b}})
+    data.reject_mixed_offset_runs(p)
+    assert a.available_at is None and b.available_at is None
+    assert a.uncertain_reason.startswith("mixed writer offsets")
+
+
 def test_writer_offset_dst():
     assert data.writer_offset_minutes(datetime(2026, 10, 31, 9, 5, 0, 500), "s_2026-10-31T13-05-00Z.json") == -240
     assert data.writer_offset_minutes(datetime(2026, 11, 7, 9, 5, 0, 500), "s_2026-11-07T14-05-00Z.json") == -300
@@ -265,13 +280,20 @@ def test_forecast_and_target_identity_causal(built):
             assert full.sealed == (origin in spec.SEALED_ORIGINS)
 
 
-def test_missing_print_is_not_retargeted(built):
-    """The 1-day target from origin 09-05 is the holiday 09-07: it stays 09-07 and is
-    marked missing instead of moving to 09-08."""
+def test_holiday_skipped_feed_gap_missing(built):
+    """Labor Day is a scheduled non-print: the 1-day target from 09-05 is 09-08.
+    A scheduled print that is absent (GAP) stays the target and is 'missing'."""
     p = built["panel"]
     r = replay.cell_records(p, _cell("wti_r1"), date(2026, 9, 5), "observed",
                             settle=True, cutoff=data.as_of(p))[0]
-    assert r.target_date == HOLIDAY and r.maturity == "missing" and r.y_first is None
+    assert r.target_date == date(2026, 9, 8) and r.maturity == "mature"
+    rv = replay.cell_records(p, _cell("wti_rv5"), date(2026, 9, 5), "observed",
+                             settle=True, cutoff=data.as_of(p))[0]
+    assert HOLIDAY not in [date.fromisoformat(d) for d in rv.contract["window"]]
+    assert rv.maturity == "mature"
+    g = replay.cell_records(p, _cell("wti_r1"), date(2026, 10, 17), "observed",
+                            settle=True, cutoff=data.as_of(p))[0]
+    assert g.target_date == GAP and g.maturity == "missing" and g.y_first is None
 
 
 def test_rolling_retention_does_not_move_targets(built):
@@ -305,22 +327,21 @@ def test_outcome_requires_every_component_proven():
     T = date(2026, 7, 6)
     at = datetime(2026, 7, 11, tzinfo=timezone.utc)
     proven = data.Snapshot(values={T: 80.0, date(2026, 7, 7): 81.0}, available_at=at)
-    cell = _cell("spread_d1")
-    pl = {"target": T, "window": [T], "gap": 0, "m": 1}
+    pl = {"target": T, "window": [T], "gap": 0, "m": 1, "kind": "spread", "keys": ["wti", "brent"]}
     p = data.Panel(snaps={"wti": {date(2026, 7, 11): proven},
                           "brent": {date(2026, 7, 11): data.Snapshot(values={T: 85.0})},
                           "hh": {}, "gas": {}})
-    assert replay.outcome(p, cell, pl, 5.0, cut)["maturity"] == "timing_uncertain"
+    assert replay.outcome(p, pl, 5.0, cut)["maturity"] == "timing_uncertain"
     p.snaps["brent"] = {date(2026, 7, 11): data.Snapshot(values={date(2026, 7, 8): 1.0}, available_at=at)}
-    assert replay.outcome(p, cell, pl, 5.0, cut)["maturity"] == "missing"
+    assert replay.outcome(p, pl, 5.0, cut)["maturity"] == "missing"
     p.snaps["brent"] = {}
-    assert replay.outcome(p, cell, pl, 5.0, cut)["maturity"] == "immature"
+    assert replay.outcome(p, pl, 5.0, cut)["maturity"] == "immature"
     p.snaps["brent"] = {date(2026, 7, 11): data.Snapshot(values={T: 86.0}, available_at=at)}
-    oc = replay.outcome(p, cell, pl, 5.0, cut)
+    oc = replay.outcome(p, pl, 5.0, cut)
     assert oc["maturity"] == "mature" and oc["y_first"] == pytest.approx(1.0)
     assert oc["target_released_at"] == at
     # a component available only after the scoring cutoff is not mature
-    assert replay.outcome(p, cell, pl, 5.0, at - timedelta(seconds=1))["maturity"] == "immature"
+    assert replay.outcome(p, pl, 5.0, at - timedelta(seconds=1))["maturity"] == "immature"
 
 
 def test_spread_uses_common_dates():
@@ -334,6 +355,8 @@ def test_calendar_plan():
     assert (pl["gap"], pl["m"], pl["target"]) == (3, 4, date(2026, 11, 9))
     pl = replay.plan(_cell("gas_w4"), date(2026, 10, 26), date(2026, 11, 7))
     assert (pl["gap"], pl["target"]) == (1, date(2026, 11, 30))
+    pl = replay.plan(_cell("wti_r1"), date(2026, 9, 3), date(2026, 9, 5))
+    assert (pl["gap"], pl["m"], pl["target"]) == (1, 2, date(2026, 9, 8))   # Labor Day skipped
     pl = replay.plan(_cell("wti_rv5"), date(2026, 11, 5), date(2026, 11, 7))
     assert pl["window"][0] == date(2026, 11, 6) and pl["window"][-1] == date(2026, 11, 13)
 
@@ -389,11 +412,13 @@ def test_reconcile_writes_no_forecasts(built, tmp_path):
     assert run.main(["reconcile", "--extract", str(extract), "--workdir", str(tmp_path / "b")]) == 0
 
 
-def test_backtest_and_one_time_holdout_release(built, tmp_path, frozen):
+def test_backtest_and_one_time_holdout_release(built, tmp_path, frozen, monkeypatch):
     import duckdb
     args = ["backtest", "--warehouse", str(built["wh"]), "--workdir", str(tmp_path)]
     assert run.main(args) == 0
     assert run.main([*args, "--release-holdout"]) == 0
+    assert run.main([*args, "--release-holdout"]) == 2
+    monkeypatch.setattr(spec, "SPEC_VERSION", "9.9-renamed")       # a spec revision cannot reopen it
     assert run.main([*args, "--release-holdout"]) == 2
     con = duckdb.connect(str(tmp_path / "ledger.duckdb"), read_only=True)
     try:
@@ -401,7 +426,7 @@ def test_backtest_and_one_time_holdout_release(built, tmp_path, frozen):
             "SELECT r.started_utc, count(f.y_first) FROM backtest_forecasts f JOIN runs r USING (run_id) "
             "WHERE f.sealed GROUP BY 1 ORDER BY 1").fetchall()
         assert rows[0][1] == 0 and rows[1][1] > 0
-        assert con.execute("SELECT count(*) FROM holdout_releases").fetchone()[0] == 1
+        assert con.execute("SELECT holdout_id FROM holdout_releases").fetchall() == [(spec.HOLDOUT_ID,)]
         assert con.execute("SELECT count(*) FROM backtest_scores WHERE sealed AND "
                            "summary LIKE '%mean_pinball%' AND run_id = (SELECT run_id FROM runs "
                            "ORDER BY started_utc LIMIT 1)").fetchone()[0] == 0
@@ -409,36 +434,111 @@ def test_backtest_and_one_time_holdout_release(built, tmp_path, frozen):
         con.close()
 
 
-def test_forward_issue_immutable_and_settle(built, tmp_path, frozen, monkeypatch):
-    import duckdb
-    origin = date(2026, 10, 17)
-    cutoff = replay.issuance(origin)
+ORIGIN = date(2026, 10, 17)     # wti_r1 target = GAP (10-19): missing until the backfill
+
+
+@pytest.fixture
+def forward(built, tmp_path, frozen, monkeypatch):
     obs, runs, _ = make_rows()
     early = tmp_path / "early.duckdb"
-    _write_warehouse(early, [o for o in obs if o[3] <= origin], [r for r in runs if r[1].date() <= origin])
-    monkeypatch.setattr(run, "_now", lambda: cutoff + timedelta(hours=1))
+    _write_warehouse(early, [o for o in obs if o[3] <= ORIGIN], [r for r in runs if r[1].date() <= ORIGIN])
     led = tmp_path / "ledger.duckdb"
-    base = ["--workdir", str(tmp_path), "--ledger", str(led)]
-    assert run.main(["issue", "--warehouse", str(early), *base]) == 0
-    assert run.main(["issue", "--warehouse", str(early), *base]) == 2               # immutable
-    assert run.main(["issue", "--origin", "2026-10-24", "--warehouse", str(early), *base]) == 2  # future
-    monkeypatch.setattr(run, "_now", lambda: datetime(2026, 11, 8, tzinfo=timezone.utc))
-    assert run.main(["settle", "--warehouse", str(built["wh"]), *base]) == 0
-    assert run.main(["settle", "--warehouse", str(built["wh"]), *base]) == 0        # no duplicates
+    return {"early": early, "led": led, "base": ["--workdir", str(tmp_path), "--ledger", str(led)],
+            "tmp": tmp_path}
+
+
+def _q(led, sql):
+    import duckdb
     con = duckdb.connect(str(led), read_only=True)
     try:
-        n, late = con.execute("SELECT count(*), bool_or(late) FROM forward_forecasts").fetchone()
-        assert n == sum(len(replay.BASELINES[c.kind]) for c in spec.CELLS) and late is True
-        outs = dict(con.execute("SELECT maturity, count(*) FROM forward_outcomes GROUP BY 1").fetchall())
-        assert outs.get("mature", 0) > 0
-        assert con.execute("SELECT count(*), count(DISTINCT forecast_id) FROM forward_outcomes").fetchone()[0] \
-            == sum(outs.values())
-        q, tgt = con.execute("SELECT quantiles, target_date FROM forward_forecasts "
-                             "WHERE cell_id='wti_r1' AND baseline='B0'").fetchone()
+        return con.execute(sql).fetchall()
     finally:
         con.close()
-    rep = next(r for r in built["recs"] if r.origin == origin
-               and r.cell_id == "wti_r1" and r.baseline == "B0")
+
+
+def test_forward_issue_immutable_prospective(built, forward, monkeypatch):
+    cutoff = replay.issuance(ORIGIN)
+    monkeypatch.setattr(run, "_now", lambda: cutoff + timedelta(hours=1))
+    args = ["issue", "--warehouse", str(forward["early"]), *forward["base"]]
+    assert run.main(args) == 0
+    assert run.main(args) == 2                                                    # immutable
+    assert run.main(["issue", "--origin", "2026-10-24", "--warehouse", str(forward["early"]),
+                     *forward["base"]]) == 2                                      # future cutoff
+    n, late = _q(forward["led"], "SELECT count(*), bool_or(late) FROM forward_forecasts")[0]
+    assert n == sum(len(replay.BASELINES[c.kind]) for c in spec.CELLS) and late is True
+    assert _q(forward["led"], "SELECT DISTINCT track FROM forward_track") == [("prospective",)]
+    q, tgt = _q(forward["led"], "SELECT quantiles, target_date FROM forward_forecasts "
+                                "WHERE cell_id='wti_r1' AND baseline='B0'")[0]
+    rep = next(r for r in built["recs"] if r.origin == ORIGIN and r.cell_id == "wti_r1" and r.baseline == "B0")
     import json
-    assert tgt == rep.target_date and json.loads(q) == {str(k): v for k, v in rep.quantiles.items()}
+    assert tgt == rep.target_date == GAP and json.loads(q) == {str(k): v for k, v in rep.quantiles.items()}
     assert json.loads(q)["0.5"] == 0.0
+
+
+def test_issue_after_first_target_is_retrospective(forward, monkeypatch):
+    # 00:30 ET Monday 10-19: the first target period has begun
+    monkeypatch.setattr(run, "_now", lambda: datetime(2026, 10, 19, 4, 30, tzinfo=timezone.utc))
+    args = ["issue", "--origin", str(ORIGIN), "--warehouse", str(forward["early"]), *forward["base"]]
+    assert run.main(args) == 2
+    assert run.main([*args, "--retrospective"]) == 0
+    assert _q(forward["led"], "SELECT DISTINCT track FROM forward_track") == [("retrospective",)]
+
+
+def test_commit_after_deadline_counts_as_retrospective(forward, monkeypatch):
+    times = iter([datetime(2026, 10, 18, 23, 0, tzinfo=timezone.utc),       # start: before deadline
+                  datetime(2026, 10, 19, 5, 0, tzinfo=timezone.utc)])       # commit: after 00:00 ET
+    last = [None]
+
+    def fake_now():
+        last[0] = next(times, last[0])
+        return last[0]
+    monkeypatch.setattr(run, "_now", fake_now)
+    monkeypatch.setattr(run, "_run_row", lambda *a, **k: {
+        "run_id": "rid", "mode": "issue", "started_utc": None, "ended_utc": None,
+        "code_tree_sha256": "t", "code_head": "abc", "code_dirty": False, "spec_version": "x",
+        "spec_sha256": "s", "holdout_id": "h", "env_inventory_sha256": "e",
+        "extract_sha256": "x", "python": "3", "duckdb": "d"})
+    assert run.main(["issue", "--origin", str(ORIGIN), "--warehouse", str(forward["early"]),
+                     *forward["base"]]) == 0
+    assert _q(forward["led"], "SELECT DISTINCT requested_track, track FROM forward_track") == \
+        [("prospective", "retrospective")]
+
+
+def test_settle_provisional_then_final_after_backfill(built, forward, monkeypatch):
+    cutoff = replay.issuance(ORIGIN)
+    monkeypatch.setattr(run, "_now", lambda: cutoff + timedelta(hours=1))
+    assert run.main(["issue", "--warehouse", str(forward["early"]), *forward["base"]]) == 0
+    monkeypatch.setattr(run, "_now", lambda: datetime(2026, 11, 8, tzinfo=timezone.utc))
+    assert run.main(["settle", "--warehouse", str(built["wh"]), *forward["base"]]) == 0
+    assert run.main(["settle", "--warehouse", str(built["wh"]), *forward["base"]]) == 0
+    sql_w = ("SELECT o.maturity FROM forward_outcomes o JOIN forward_forecasts f USING (forecast_id) "
+             "WHERE f.cell_id='wti_r1' AND f.baseline='B0'")
+    assert _q(forward["led"], sql_w) == []                                       # missing is provisional
+    att = _q(forward["led"], "SELECT a.maturity FROM forward_settle_attempts a JOIN forward_forecasts f "
+                             "USING (forecast_id) WHERE f.cell_id='wti_r1' AND f.baseline='B0'")
+    assert att == [("missing",), ("missing",)]
+    outs = dict(_q(forward["led"], "SELECT maturity, count(*) FROM forward_outcomes GROUP BY 1"))
+    assert outs.get("mature", 0) > 0
+    # a later extract carries the backfilled print: the same forecast now settles
+    obs, runs, _ = make_rows(backfill=True)
+    late = forward["tmp"] / "backfill.duckdb"
+    _write_warehouse(late, obs, runs)
+    monkeypatch.setattr(run, "_now", lambda: datetime(2026, 11, 15, tzinfo=timezone.utc))
+    assert run.main(["settle", "--warehouse", str(late), *forward["base"]]) == 0
+    assert _q(forward["led"], sql_w) == [("mature",)]
+    n, d = _q(forward["led"], "SELECT count(*), count(DISTINCT forecast_id) FROM forward_outcomes")[0]
+    assert n == d
+
+
+def test_settle_uses_stored_contract_not_current_spec(built, monkeypatch):
+    """An old forecast settles on its issue-time target even if the spec's cells
+    and calendar change afterwards."""
+    p = built["panel"]
+    r = replay.cell_records(p, _cell("wti_r5"), date(2026, 7, 18), "observed", settle=True,
+                            cutoff=data.as_of(p))[0]
+    stored = r.contract
+    monkeypatch.setattr(spec, "CELLS", ())
+    monkeypatch.setattr(spec, "CALENDAR", {"wti": frozenset({r.target_date}), "brent": frozenset(),
+                                           "hh": frozenset()})
+    oc = replay.settle_forward(p, stored, r.anchor_value)
+    assert oc["target_date"] == r.target_date and oc["y_first"] == r.y_first

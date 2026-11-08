@@ -191,7 +191,24 @@ def load_extract(blob: bytes) -> Panel:
         for snap in snaps.values():
             snap.available_at, snap.run_id, snap.uncertain_reason = availability(
                 snap, spec.SERIES[key], p.runs)
+    reject_mixed_offset_runs(p)
     return p
+
+
+def reject_mixed_offset_runs(p: Panel) -> None:
+    """Run boundaries are converted with the writer offset. If series written in
+    the same run show different offsets (e.g. a run spanning a DST change), the
+    conversion is ambiguous, so every snapshot mapped to that run becomes uncertain."""
+    by_run: dict[str, list[Snapshot]] = {}
+    for snaps in p.snaps.values():
+        for snap in snaps.values():
+            if snap.run_id:
+                by_run.setdefault(snap.run_id, []).append(snap)
+    for rid, group in by_run.items():
+        if len({o for s in group for o in s.offsets}) > 1:
+            for s in group:
+                s.available_at, s.run_id = None, None
+                s.uncertain_reason = f"mixed writer offsets in run {rid}"
 
 
 def availability(snap: Snapshot, series_id: str, runs: list[Run]):

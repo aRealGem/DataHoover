@@ -11,9 +11,12 @@ Information contract (FA-008 as amended for AB-005/AB-006):
     reconstruction from latest values (newest snapshot holding each date) with
     G0b-median age masks. No claim is made from this group;
   * forward group: ``issue()`` for one explicit origin; stored insert-only by run.py;
-  * targets are fixed at issue time from a calendar (weekdays for daily series,
-    the anchor's weekly cadence for gasoline). They are never re-chosen from later
-    data: an absent label is recorded as ``missing``, not shifted;
+  * targets are fixed at issue time from a frozen PRINT calendar (weekdays minus
+    spec.CALENDAR holidays for daily series; the anchor's weekly cadence for
+    gasoline). Horizons count scheduled prints, as the baselines' m-step windows
+    count observed rows. The contract (kind, series, window) is stored with each
+    forward forecast and settlement reads it back. An absent scheduled print is
+    ``missing`` (provisional until spec.SETTLE_FINAL_AFTER_DAYS), never shifted;
   * an outcome is ``mature`` only if every component date has a proven first-seen
     availability at or before the scoring cutoff. First-seen = the earliest
     snapshot *proven available* that holds the date.
@@ -75,44 +78,62 @@ def align(a: Series, b: Series) -> Series:
     return [(d, v - da[d]) for d, v in b if d in da]
 
 
-# --- issue-time calendar ------------------------------------------------------
+# --- issue-time print calendar ----------------------------------------------
 
-def _weekdays_after(d: date, n: int) -> list[date]:
+def _keys(cell) -> tuple[str, ...]:
+    return ("wti", "brent") if cell.kind == "spread" else (cell.key,)
+
+
+def is_print_day(keys, d: date) -> bool:
+    """Scheduled print for every series in ``keys`` (weekday, not a listed holiday)."""
+    return d.weekday() < 5 and all(d not in spec.CALENDAR[k] for k in keys)
+
+
+def prints_after(keys, d: date, n: int) -> list[date]:
     out = []
     while len(out) < n:
         d += timedelta(days=1)
-        if d.weekday() < 5:
+        if is_print_day(keys, d):
             out.append(d)
     return out
 
 
-def _last_weekday_on_or_before(d: date) -> date:
-    while d.weekday() >= 5:
+def last_print_on_or_before(keys, d: date) -> date:
+    while not is_print_day(keys, d):
         d -= timedelta(days=1)
     return d
 
 
+def prints_between(keys, after: date, upto: date) -> int:
+    n, d = 0, after + timedelta(days=1)
+    while d <= upto:
+        n += is_print_day(keys, d)
+        d += timedelta(days=1)
+    return n
+
+
 def plan(cell, anchor: date, origin: date) -> dict:
-    """gap, m, target date and component window, fixed from the calendar at issue."""
+    """Issue-time contract: gap and m in scheduled prints (matching the baselines,
+    which index observed rows), target date and every component date."""
+    keys = _keys(cell)
     if cell.kind == "weekly_logret":
         gap = (origin - anchor).days // 7
         target = anchor + timedelta(weeks=gap + cell.h)
-        return {"gap": gap, "m": gap + cell.h, "target": target, "window": [target]}
-    t0 = _last_weekday_on_or_before(origin)
-    gap = sum(1 for _ in _iter_weekdays(anchor, t0))
-    if cell.kind == "rv":
-        window = [t0] + _weekdays_after(t0, spec.RV_DAYS)
-        return {"gap": gap, "m": gap + spec.RV_DAYS, "target": window[-1], "window": window}
-    target = _weekdays_after(t0, cell.h)[-1]
-    return {"gap": gap, "m": gap + cell.h, "target": target, "window": [target]}
-
-
-def _iter_weekdays(after: date, upto: date):
-    d = after + timedelta(days=1)
-    while d <= upto:
-        if d.weekday() < 5:
-            yield d
-        d += timedelta(days=1)
+        window = [target]
+    else:
+        t0 = last_print_on_or_before(keys, origin)
+        gap = prints_between(keys, anchor, t0)
+        if cell.kind == "rv":
+            window = [t0] + prints_after(keys, t0, spec.RV_DAYS)
+            gap_h = spec.RV_DAYS
+        else:
+            window = [prints_after(keys, t0, cell.h)[-1]]
+            gap_h = cell.h
+        target = window[-1]
+        return {"gap": gap, "m": gap + gap_h, "target": target, "window": window,
+                "kind": cell.kind, "keys": list(keys)}
+    return {"gap": gap, "m": gap + cell.h, "target": target, "window": window,
+            "kind": cell.kind, "keys": list(keys)}
 
 
 # --- outcomes -----------------------------------------------------------------
@@ -150,8 +171,10 @@ def component_state(snaps: dict[date, Snapshot], od: date, cutoff: datetime) -> 
 _STATE_ORDER = ("immature", "missing", "timing_uncertain")
 
 
-def outcome(panel: Panel, cell, pl: dict, anchor_value: float, cutoff: datetime | None) -> dict:
-    keys = ("wti", "brent") if cell.kind == "spread" else (cell.key,)
+def outcome(panel: Panel, pl: dict, anchor_value: float, cutoff: datetime | None) -> dict:
+    """Outcome under an issue-time contract ``pl`` (kind, keys, window, target),
+    which settlement reads back from the ledger rather than recomputing."""
+    kind, keys = pl["kind"], tuple(pl["keys"])
     comps = [(k, d) for k in keys for d in pl["window"]]
     out = {"target_date": pl["target"], "target_ref_start": pl["window"][0],
            "target_ref_end": pl["window"][-1]}
@@ -167,16 +190,16 @@ def outcome(panel: Panel, cell, pl: dict, anchor_value: float, cutoff: datetime 
     out["k_realized"] = None
     ys = {}
     for tag, val in (("y_first", lambda c: first[c][0]), ("y_latest", lambda c: latest[c])):
-        if cell.kind == "spread":
+        if kind == "spread":
             t = pl["target"]
             ys[tag] = (val(("brent", t)) - val(("wti", t))) - anchor_value
-        elif cell.kind == "rv":
-            px = [val((cell.key, d)) for d in pl["window"]]
+        elif kind == "rv":
+            px = [val((keys[0], d)) for d in pl["window"]]
             if any(p <= 0 for p in px):
                 return {**out, "maturity": "unscorable"}
             ys[tag] = bl._rv([math.log(b / a) for a, b in zip(px, px[1:])])
         else:
-            v = val((cell.key, pl["target"]))
+            v = val((keys[0], pl["target"]))
             if v <= 0 or anchor_value <= 0:
                 return {**out, "maturity": "unscorable"}
             ys[tag] = math.log(v / anchor_value)
@@ -211,6 +234,7 @@ class Record:
     rt_used: dict = field(default_factory=dict)
     anchor_date: date | None = None
     anchor_value: float | None = None
+    contract: dict | None = None
     gap: int | None = None
     m: int | None = None
     quantiles: dict | None = None
@@ -297,7 +321,7 @@ def cell_records(panel: Panel, cell, origin: date, group: str, *, settle: bool,
     if sealed:
         oc["maturity"] = "sealed"
     elif settle:
-        oc = outcome(panel, cell, pl, anchor_value, cutoff)
+        oc = outcome(panel, pl, anchor_value, cutoff)
         oc["k_realized"] = realized_steps(panel, cell, anchor, pl["target"], cutoff)
     inputs = _inputs_sha(series, rt_used)
     recs = []
@@ -305,7 +329,7 @@ def cell_records(panel: Panel, cell, origin: date, group: str, *, settle: bool,
         qs, why = fc[n]
         recs.append(Record(**base, baseline=n, forecast_id=ids[n], inputs_sha256=inputs,
                            status="ok" if qs else "abstain", reason=why, rt_used=rt_used,
-                           anchor_date=anchor, anchor_value=anchor_value, gap=pl["gap"], m=pl["m"], quantiles=qs, **oc))
+                           anchor_date=anchor, anchor_value=anchor_value, contract=contract_json(pl), gap=pl["gap"], m=pl["m"], quantiles=qs, **oc))
     return recs
 
 
@@ -348,9 +372,17 @@ def issue(panel: Panel, origin: date) -> list[Record]:
     return out
 
 
-def settle_forward(panel: Panel, origin: date, anchor_date: date, anchor_value: float,
-                   cell_id: str) -> dict:
-    """Outcome for a stored forward forecast; target fixed from its issue-time calendar."""
-    cell = next(c for c in spec.CELLS if c.cell_id == cell_id)
-    pl = plan(cell, anchor_date, origin)
-    return outcome(panel, cell, pl, anchor_value, as_of(panel))
+def contract_json(pl: dict) -> dict:
+    return {"kind": pl["kind"], "keys": list(pl["keys"]), "target": str(pl["target"]),
+            "window": [str(d) for d in pl["window"]]}
+
+
+def contract_from_json(c: dict) -> dict:
+    return {"kind": c["kind"], "keys": c["keys"], "target": date.fromisoformat(c["target"]),
+            "window": [date.fromisoformat(d) for d in c["window"]]}
+
+
+def settle_forward(panel: Panel, contract: dict, anchor_value: float) -> dict:
+    """Outcome for a stored forward forecast from its STORED contract; the current
+    spec's cells and calendar are not consulted."""
+    return outcome(panel, contract_from_json(contract), anchor_value, as_of(panel))

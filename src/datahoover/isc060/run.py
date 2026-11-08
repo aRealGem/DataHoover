@@ -7,8 +7,11 @@
               Sealed origins get no outcomes or scores unless --release-holdout,
               which the ledger allows once per spec version.
   issue       Forward forecasts for one Saturday origin (default: the latest one
-              whose cutoff has passed). Insert-only; re-issue is refused.
-  settle      Outcomes for forward forecasts whose labels are terminal. Insert-only.
+              whose cutoff has passed). Insert-only; re-issue is refused. Must
+              commit before 00:00 ISSUANCE_TZ of the first target date; a later
+              request is refused unless --retrospective, which labels it so.
+  settle      Settles forward forecasts from their STORED contracts. Final
+              outcomes are insert-only; provisional states are logged as attempts.
 
 backtest/issue/settle refuse unless spec.SPEC_FROZEN and the harness code is a
 clean, known git commit (fail closed on unknown or dirty code identity).
@@ -18,12 +21,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import platform
 import subprocess
 import sys
 import uuid
 from collections import Counter
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 from importlib import metadata
 from pathlib import Path
 
@@ -103,6 +108,7 @@ def _run_row(mode: str, ident: dict, workdir: Path, extract_sha: str, started: d
     return {"run_id": str(uuid.uuid4()), "mode": mode, "started_utc": started.replace(tzinfo=None),
             "ended_utc": _now().replace(tzinfo=None), **ident,
             "spec_version": spec.SPEC_VERSION, "spec_sha256": spec_sha(),
+            "holdout_id": spec.HOLDOUT_ID,
             "env_inventory_sha256": env_inventory(workdir), "extract_sha256": extract_sha,
             "python": platform.python_version(), "duckdb": duckdb.__version__}
 
@@ -129,6 +135,31 @@ def eligibility(panel: data.Panel) -> str:
     return "\n".join(lines) + "\n"
 
 
+def calendar_check(panel: data.Panel) -> str:
+    """Frozen print calendar vs the data (evidence for freezing spec.CALENDAR)."""
+    lines = []
+    for key in sorted(spec.SERIES):
+        vals = replay.latest_values(panel.snaps[key])
+        if not vals:
+            continue
+        lo, hi = min(vals), max(vals)
+        if key in spec.WEEKLY_WEEKDAY:
+            off = sorted(d for d in vals if d.weekday() != spec.WEEKLY_WEEKDAY[key])
+            lines.append(f"  {key}: {len(vals)} prints {lo}..{hi}; off-weekday dates: "
+                         f"{' '.join(map(str, off)) or 'none'}")
+            continue
+        absent, d = [], lo
+        while d <= hi:
+            if replay.is_print_day((key,), d) and d not in vals:
+                absent.append(d)
+            d += timedelta(days=1)
+        printed_holidays = sorted(h for h in spec.CALENDAR[key] if lo <= h <= hi and h in vals)
+        lines.append(f"  {key}: {len(vals)} prints {lo}..{hi}; scheduled-but-absent: "
+                     f"{' '.join(map(str, absent)) or 'none'}; listed holidays WITH data: "
+                     f"{' '.join(map(str, printed_holidays)) or 'none'}")
+    return "\n".join(lines) + "\n"
+
+
 def cmd_reconcile(args) -> int:
     workdir = Path(args.workdir)
     blob, sha, path = _load(args)
@@ -146,6 +177,8 @@ def cmd_reconcile(args) -> int:
         f"runs in extract: {len(panel.runs)} "
         f"({dict(sorted(Counter(r.status for r in panel.runs).items()))})\n\n",
         data.format_reconciliation(data.reconcile(panel), panel),
+        "\n# Print calendar check (latest values)\n",
+        calendar_check(panel),
         "\n# Origin eligibility (no forecasts)\n",
         eligibility(panel),
     ])
@@ -188,6 +221,13 @@ def latest_due_origin(now: datetime) -> date:
     return d
 
 
+def issue_deadline(origin: date) -> datetime:
+    """00:00 ISSUANCE_TZ on the Monday after the Saturday origin: no target return
+    (daily or weekly) can start accruing before it, so a commit after it is late."""
+    return datetime.combine(origin + timedelta(days=2), time(0),
+                            tzinfo=ZoneInfo(spec.ISSUANCE_TZ)).astimezone(timezone.utc)
+
+
 def cmd_issue(args) -> int:
     ident = _gate("issue")
     if ident is None:
@@ -201,14 +241,22 @@ def cmd_issue(args) -> int:
         return 2
     blob, sha, _ = _load(args)
     records = replay.issue(data.load_extract(blob), origin)
+    earliest = issue_deadline(origin)
+    deadlines = {r.forecast_id: earliest for r in records}
+    track = "retrospective" if args.retrospective else "prospective"
+    if track == "prospective" and now >= earliest:
+        print(f"REFUSED: first target period for {origin} has begun ({earliest}); "
+              "use --retrospective to record a labelled reconstruction", file=sys.stderr)
+        return 2
     run = _run_row("issue", ident, Path(args.workdir), sha, now)
     try:
-        ledger.write_issue(_ledger_path(args), run, records, cutoff=cutoff, issued=now)
+        committed = ledger.write_issue(_ledger_path(args), run, records, cutoff=cutoff, issued=now,
+                                       deadlines=deadlines, track=track, now=_now)
     except ledger.LedgerRefusal as e:
         print(f"REFUSED: {e}", file=sys.stderr)
         return 2
-    late = " (LATE: issued after cutoff; info still limited to the cutoff)" if now > cutoff else ""
-    print(f"issued origin {origin}: {len(records)} rows{late}")
+    eff = "prospective" if track == "prospective" and committed < earliest else "retrospective"
+    print(f"issued origin {origin}: {len(records)} rows, track={eff}, committed {committed.isoformat()}")
     return 0
 
 
@@ -219,18 +267,28 @@ def cmd_settle(args) -> int:
     started = _now()
     blob, sha, _ = _load(args)
     panel = data.load_extract(blob)
-    rows = []
-    for fid, origin, cell_id, anchor_date, anchor_value in ledger.unsettled(_ledger_path(args)):
-        oc = replay.settle_forward(panel, origin, anchor_date, anchor_value, cell_id)
-        if oc["maturity"] == "immature":
-            continue
-        rows.append([fid, started, None, sha, oc["maturity"], oc.get("y_first"),
-                     oc.get("y_latest"), oc.get("target_released_at")])
+    cutoff = data.as_of(panel)
+    final_rows, attempts = [], []
+    for fid, contract_s, anchor_value in ledger.unsettled(_ledger_path(args)):
+        contract = json.loads(contract_s)
+        oc = replay.settle_forward(panel, contract, anchor_value)
+        m = oc["maturity"]
+        end = date.fromisoformat(contract["window"][-1])
+        final = m in ("mature", "unscorable") or (
+            m in ("missing", "timing_uncertain") and cutoff is not None
+            and cutoff.date() >= end + timedelta(days=spec.SETTLE_FINAL_AFTER_DAYS))
+        if final:
+            final_rows.append([fid, started, None, sha, m, oc.get("y_first"),
+                               oc.get("y_latest"), oc.get("target_released_at")])
+        else:
+            attempts.append([fid, None, sha, cutoff, m, started])
     run = _run_row("settle", ident, Path(args.workdir), sha, started)
-    for r in rows:
+    for r in final_rows:
         r[2] = run["run_id"]
-    ledger.write_settle(_ledger_path(args), run, rows)
-    print(f"settled {len(rows)} forward forecasts")
+    for a in attempts:
+        a[1] = run["run_id"]
+    ledger.write_settle(_ledger_path(args), run, final_rows, attempts)
+    print(f"settled {len(final_rows)} final, {len(attempts)} provisional")
     return 0
 
 
@@ -248,6 +306,8 @@ def main(argv=None) -> int:
             p.add_argument("--release-holdout", action="store_true")
         if name == "issue":
             p.add_argument("--origin", help="Saturday YYYY-MM-DD (default: latest due)")
+            p.add_argument("--retrospective", action="store_true",
+                           help="label a reconstruction issued after the deadline")
     args = ap.parse_args(argv)
     return {"reconcile": cmd_reconcile, "backtest": cmd_backtest, "issue": cmd_issue,
             "settle": cmd_settle}[args.cmd](args)

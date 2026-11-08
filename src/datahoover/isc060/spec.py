@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, time, timedelta
 
-SPEC_VERSION = "0.4-draft"
+SPEC_VERSION = "0.5-draft"
 # Forecast mode refuses to run until the spec is frozen on the exchange page
 # and this flag is flipped in a reviewed commit.
 SPEC_FROZEN = False
@@ -52,6 +52,39 @@ ISSUANCE_TIME = time(12, 0)
 # Outcomes and scores for these origins are not computed until a one-time,
 # ledger-recorded release (run.py backtest --release-holdout).
 SEALED_ORIGINS = tuple(date(2026, 8, 15) + timedelta(weeks=i) for i in range(SEAL_ORIGINS))
+# Experiment identity of that holdout: release is recorded against THIS id, not
+# the spec version, so a spec revision cannot make an opened holdout fresh.
+HOLDOUT_ID = "isc060-g1-oil-holdout-2026-08-15x13"
+
+# Print calendars (AB-008). Horizons count scheduled PRINTS, matching the
+# baselines, which index observed rows. Daily oil/gas spot prints = weekdays
+# minus the US exchange holidays below (NYSE/NYMEX list, uncited, from
+# published exchange schedules; 2025-01-09 national day of mourning included).
+# PROVISIONAL for Brent: EIA's Brent spot may follow other closures. Run 0
+# prints, per series, weekdays absent from the data and listed holidays that do
+# have data; v1.0 freezes only after those match or the list is amended.
+US_HOLIDAYS = frozenset(date.fromisoformat(d) for d in (
+    "2024-01-01", "2024-01-15", "2024-02-19", "2024-03-29", "2024-05-27", "2024-06-19",
+    "2024-07-04", "2024-09-02", "2024-11-28", "2024-12-25",
+    "2025-01-01", "2025-01-09", "2025-01-20", "2025-02-17", "2025-04-18", "2025-05-26",
+    "2025-06-19", "2025-07-04", "2025-09-01", "2025-11-27", "2025-12-25",
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19",
+    "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18",
+    "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+))
+CALENDAR = {"wti": US_HOLIDAYS, "brent": US_HOLIDAYS, "hh": US_HOLIDAYS}
+# Gasoline (GASREGCOVW) is dated on the survey Monday even when the release
+# shifts; target = anchor date + 7k. Run 0 lists any non-Monday dates.
+WEEKLY_WEEKDAY = {"gas": 0}
+
+# Forward issuance latency (AB-008): an issue must COMMIT before 00:00
+# ISSUANCE_TZ on the Monday after the origin (before any target return can
+# start accruing). Later requests are labelled
+# track = "retrospective" and never count toward the prospective record.
+# Settlement finality: "missing"/"timing_uncertain" stay provisional until the
+# scoring cutoff is this many days past the target window end.
+SETTLE_FINAL_AFTER_DAYS = 28
 
 
 @dataclass(frozen=True)
