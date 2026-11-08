@@ -222,10 +222,9 @@ def latest_due_origin(now: datetime) -> date:
 
 
 def issue_deadline(origin: date) -> datetime:
-    """00:00 ISSUANCE_TZ on the Monday after the Saturday origin: no target return
-    (daily or weekly) can start accruing before it, so a commit after it is late."""
-    return datetime.combine(origin + timedelta(days=2), time(0),
-                            tzinfo=ZoneInfo(spec.ISSUANCE_TZ)).astimezone(timezone.utc)
+    """Commit deadline: the Saturday cutoff + spec.ISSUE_COMMIT_WINDOW (Sunday
+    12:00 ET), before the Sunday-evening futures open that informs Monday's spot."""
+    return replay.issuance(origin) + spec.ISSUE_COMMIT_WINDOW
 
 
 def cmd_issue(args) -> int:
@@ -276,7 +275,7 @@ def cmd_settle(args) -> int:
         end = date.fromisoformat(contract["window"][-1])
         final = m in ("mature", "unscorable") or (
             m in ("missing", "timing_uncertain") and cutoff is not None
-            and cutoff.date() >= end + timedelta(days=spec.SETTLE_FINAL_AFTER_DAYS))
+            and cutoff.date() >= end + timedelta(days=contract["final_after_days"]))
         if final:
             final_rows.append([fid, started, None, sha, m, oc.get("y_first"),
                                oc.get("y_latest"), oc.get("target_released_at")])

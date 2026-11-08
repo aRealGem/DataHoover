@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, time, timedelta
 
-SPEC_VERSION = "0.5-draft"
+SPEC_VERSION = "0.6-draft"
 # Forecast mode refuses to run until the spec is frozen on the exchange page
 # and this flag is flipped in a reviewed commit.
 SPEC_FROZEN = False
@@ -74,16 +74,28 @@ US_HOLIDAYS = frozenset(date.fromisoformat(d) for d in (
     "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
 ))
 CALENDAR = {"wti": US_HOLIDAYS, "brent": US_HOLIDAYS, "hh": US_HOLIDAYS}
+# Versioned, with finite coverage: a date outside it is an error, never a guess.
+# Applying this list to pre-2026-04-22 origins is a retrospective calendar
+# reconstruction and belongs to the exploratory group only.
+CALENDAR_VERSION = "us-exchange-holidays-2024-2027-v1"
+CALENDAR_COVERAGE = (date(2024, 1, 1), date(2027, 12, 31))
 # Gasoline (GASREGCOVW) is dated on the survey Monday even when the release
 # shifts; target = anchor date + 7k. Run 0 lists any non-Monday dates.
 WEEKLY_WEEKDAY = {"gas": 0}
 
-# Forward issuance latency (AB-008): an issue must COMMIT before 00:00
-# ISSUANCE_TZ on the Monday after the origin (before any target return can
-# start accruing). Later requests are labelled
-# track = "retrospective" and never count toward the prospective record.
+# Forward issuance latency (AB-009). Targets are EIA spot assessments published
+# via FRED, informed by futures sessions; CME's WTI overview gives the Sunday
+# open as 17:00 CT = 18:00 ET (https://www.cmegroup.com/education/courses/
+# introduction-to-energy/introduction-to-crude-oil/wti-overview). The issue
+# must COMMIT within ISSUE_COMMIT_WINDOW of the Saturday cutoff, i.e. by Sunday
+# 12:00 ET, six hours before that open (ICE Brent's Sunday open is not earlier,
+# uncited). The forecast is for the move from the info-set anchor; prints between
+# anchor and issuance are already realized but unseen, which is part of the
+# stated estimand (m = gap + h). Later requests are "retrospective".
+ISSUE_COMMIT_WINDOW = timedelta(hours=24)
 # Settlement finality: "missing"/"timing_uncertain" stay provisional until the
-# scoring cutoff is this many days past the target window end.
+# scoring cutoff is this many days past the target window end. Pinned per
+# forecast in its contract, with the RV formula, at issue time.
 SETTLE_FINAL_AFTER_DAYS = 28
 
 

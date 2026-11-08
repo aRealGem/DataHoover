@@ -84,9 +84,41 @@ def _keys(cell) -> tuple[str, ...]:
     return ("wti", "brent") if cell.kind == "spread" else (cell.key,)
 
 
+class CalendarCoverageError(ValueError):
+    pass
+
+
 def is_print_day(keys, d: date) -> bool:
     """Scheduled print for every series in ``keys`` (weekday, not a listed holiday)."""
+    lo, hi = spec.CALENDAR_COVERAGE
+    if not lo <= d <= hi:
+        raise CalendarCoverageError(f"{d} outside calendar {spec.CALENDAR_VERSION}")
     return d.weekday() < 5 and all(d not in spec.CALENDAR[k] for k in keys)
+
+
+def to_grid(series: Series, keys, weekly: bool) -> list:
+    """Place observed values on the frozen print grid: one entry per scheduled
+    print from the first observation to the last, None where absent. Values on
+    unscheduled dates (e.g. a listed holiday that has data) are not used; the Run 0
+    calendar check lists them."""
+    if not series:
+        return []
+    vals = dict(series)
+    first, last = series[0][0], series[-1][0]
+    if weekly:
+        n = (last - first).days // 7
+        dates = [last - timedelta(weeks=k) for k in range(n, -1, -1)]
+    else:
+        lo = max(first, spec.CALENDAR_COVERAGE[0])
+        dates, d = [], lo
+        while d <= last:
+            if is_print_day(keys, d):
+                dates.append(d)
+            d += timedelta(days=1)
+    grid = [(d, vals.get(d)) for d in dates]
+    while grid and grid[-1][1] is None:
+        grid.pop()
+    return grid
 
 
 def prints_after(keys, d: date, n: int) -> list[date]:
@@ -130,10 +162,18 @@ def plan(cell, anchor: date, origin: date) -> dict:
             window = [prints_after(keys, t0, cell.h)[-1]]
             gap_h = cell.h
         target = window[-1]
-        return {"gap": gap, "m": gap + gap_h, "target": target, "window": window,
-                "kind": cell.kind, "keys": list(keys)}
-    return {"gap": gap, "m": gap + cell.h, "target": target, "window": window,
-            "kind": cell.kind, "keys": list(keys)}
+        return _pinned({"gap": gap, "m": gap + gap_h, "target": target, "window": window,
+                        "kind": cell.kind, "keys": list(keys)})
+    return _pinned({"gap": gap, "m": gap + cell.h, "target": target, "window": window,
+                    "kind": cell.kind, "keys": list(keys)})
+
+
+def _pinned(pl: dict) -> dict:
+    """Pin everything settlement needs at issue time (AB-009)."""
+    if pl["window"][-1] > spec.CALENDAR_COVERAGE[1]:
+        raise CalendarCoverageError(f"{pl['window'][-1]} outside calendar {spec.CALENDAR_VERSION}")
+    return {**pl, "spec_version": spec.SPEC_VERSION, "calendar_version": spec.CALENDAR_VERSION,
+            "rv_annualize": spec.RV_ANNUALIZE, "final_after_days": spec.SETTLE_FINAL_AFTER_DAYS}
 
 
 # --- outcomes -----------------------------------------------------------------
@@ -197,7 +237,7 @@ def outcome(panel: Panel, pl: dict, anchor_value: float, cutoff: datetime | None
             px = [val((keys[0], d)) for d in pl["window"]]
             if any(p <= 0 for p in px):
                 return {**out, "maturity": "unscorable"}
-            ys[tag] = bl._rv([math.log(b / a) for a, b in zip(px, px[1:])])
+            ys[tag] = bl._rv([math.log(b / a) for a, b in zip(px, px[1:])], pl["rv_annualize"])
         else:
             v = val((keys[0], pl["target"]))
             if v <= 0 or anchor_value <= 0:
@@ -308,14 +348,25 @@ def cell_records(panel: Panel, cell, origin: date, group: str, *, settle: bool,
     else:
         series, rt, reason = _info(panel, cell.key, origin, group)
         rt_used = {cell.key: rt}
-    if reason is None and not series:
+    grid = None
+    if reason is None:
+        try:
+            grid = to_grid(series or [], _keys(cell), weekly=cell.kind == "weekly_logret")
+        except CalendarCoverageError as e:
+            reason = str(e)
+    if reason is None and not grid:
         reason = "empty info set"
+    pl = None
+    if reason is None:
+        anchor, anchor_value = grid[-1]
+        try:
+            pl = plan(cell, anchor, origin)
+        except CalendarCoverageError as e:
+            reason = str(e)
     if reason is not None:
         return [Record(**base, baseline=n, forecast_id=ids[n], status="excluded", reason=reason,
                        rt_used=rt_used) for n in names]
-    anchor, anchor_value = series[-1]
-    pl = plan(cell, anchor, origin)
-    fc = _forecast(cell, series, pl)
+    fc = _forecast(cell, grid, pl)
     oc = {"target_date": pl["target"], "target_ref_start": pl["window"][0],
           "target_ref_end": pl["window"][-1]}
     if sealed:
@@ -323,7 +374,7 @@ def cell_records(panel: Panel, cell, origin: date, group: str, *, settle: bool,
     elif settle:
         oc = outcome(panel, pl, anchor_value, cutoff)
         oc["k_realized"] = realized_steps(panel, cell, anchor, pl["target"], cutoff)
-    inputs = _inputs_sha(series, rt_used)
+    inputs = _inputs_sha(grid, rt_used)
     recs = []
     for n in names:
         qs, why = fc[n]
@@ -372,13 +423,22 @@ def issue(panel: Panel, origin: date) -> list[Record]:
     return out
 
 
+CONTRACT_FIELDS = ("kind", "keys", "target", "window", "spec_version", "calendar_version",
+                   "rv_annualize", "final_after_days")
+
+
 def contract_json(pl: dict) -> dict:
     return {"kind": pl["kind"], "keys": list(pl["keys"]), "target": str(pl["target"]),
-            "window": [str(d) for d in pl["window"]]}
+            "window": [str(d) for d in pl["window"]], "spec_version": pl["spec_version"],
+            "calendar_version": pl["calendar_version"], "rv_annualize": pl["rv_annualize"],
+            "final_after_days": pl["final_after_days"]}
 
 
 def contract_from_json(c: dict) -> dict:
-    return {"kind": c["kind"], "keys": c["keys"], "target": date.fromisoformat(c["target"]),
+    missing = [f for f in CONTRACT_FIELDS if f not in c]
+    if missing:
+        raise ValueError(f"incompatible contract, missing {missing}")
+    return {**c, "target": date.fromisoformat(c["target"]),
             "window": [date.fromisoformat(d) for d in c["window"]]}
 
 

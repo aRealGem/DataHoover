@@ -152,6 +152,35 @@ def test_nonpositive_prices_abstain():
     assert bl.b0_empirical(s, 1, log=False)[0] is not None   # spread levels may be <= 0
 
 
+def _gap_grid():
+    """Daily grid, flat between gaps; every 10th scheduled print is absent and the
+    level doubles across it. Merging steps would put log(2) in ~10% of 1-print samples."""
+    days = [d for d in (date(2025, 1, 6) + timedelta(days=i) for i in range(400)) if d.weekday() < 5]
+    out, level = [], 100.0
+    for i, d in enumerate(days):
+        if i % 10 == 5:
+            out.append((d, None))
+            level *= 2
+        else:
+            out.append((d, level))
+    return out
+
+
+def test_missing_scheduled_print_never_merges_steps():
+    """AB-009: Monday->Wednesday across an absent Tuesday must not enter the
+    one-print distribution, the EWMA, or any five-print RV window."""
+    g = _gap_grid()
+    qs, _ = bl.b0_empirical(g, 1)
+    assert max(qs.values()) == 0.0                       # the log(2) move is not a 1-print sample
+    compressed = [(d, v) for d, v in g if v is not None]       # what row-indexing used to do
+    assert bl.b0_empirical(compressed, 1)[0][0.975] > 0.5
+    qs2, _ = bl.b0_empirical(g, 2)                             # 2-print moves do span the gaps
+    assert qs2[0.975] == pytest.approx(math.log(2))
+    assert all(v == 0.0 for v in bl.b1_gaussian_ewma(g, 1)[0].values())
+    rv = bl.rv_baselines(g, 0)
+    assert rv["B0rv"][1] == "B0rv no point forecast"     # every complete 5-print window is flat
+
+
 def test_rv_baselines_nonnegative():
     rng = random.Random(3)
     s = [(START + timedelta(days=i), 50 * math.exp(rng.gauss(0, .02) * (i % 7 + 1))) for i in range(500)]
@@ -485,8 +514,9 @@ def test_issue_after_first_target_is_retrospective(forward, monkeypatch):
 
 
 def test_commit_after_deadline_counts_as_retrospective(forward, monkeypatch):
-    times = iter([datetime(2026, 10, 18, 23, 0, tzinfo=timezone.utc),       # start: before deadline
-                  datetime(2026, 10, 19, 5, 0, tzinfo=timezone.utc)])       # commit: after 00:00 ET
+    # deadline = Saturday 12:00 ET + 24 h = Sunday 2026-10-18 12:00 EDT = 16:00Z
+    times = iter([datetime(2026, 10, 18, 15, 0, tzinfo=timezone.utc),       # start 11:00 ET
+                  datetime(2026, 10, 18, 17, 0, tzinfo=timezone.utc)])      # commit 13:00 ET
     last = [None]
 
     def fake_now():
@@ -502,6 +532,19 @@ def test_commit_after_deadline_counts_as_retrospective(forward, monkeypatch):
                      *forward["base"]]) == 0
     assert _q(forward["led"], "SELECT DISTINCT requested_track, track FROM forward_track") == \
         [("prospective", "retrospective")]
+
+
+def test_sunday_evening_boundary(forward, monkeypatch):
+    """Sunday 17:30 ET is before the 18:00 ET futures open but after the frozen
+    Sunday-noon commit deadline: refused as prospective."""
+    assert run.issue_deadline(ORIGIN) == datetime(2026, 10, 18, 16, 0, tzinfo=timezone.utc)
+    assert run.issue_deadline(date(2026, 11, 7)) == datetime(2026, 11, 8, 17, 0, tzinfo=timezone.utc)
+    args = ["issue", "--origin", str(ORIGIN), "--warehouse", str(forward["early"]), *forward["base"]]
+    monkeypatch.setattr(run, "_now", lambda: datetime(2026, 10, 18, 21, 30, tzinfo=timezone.utc))
+    assert run.main(args) == 2
+    monkeypatch.setattr(run, "_now", lambda: datetime(2026, 10, 18, 15, 0, tzinfo=timezone.utc))
+    assert run.main(args) == 0
+    assert _q(forward["led"], "SELECT DISTINCT track FROM forward_track") == [("prospective",)]
 
 
 def test_settle_provisional_then_final_after_backfill(built, forward, monkeypatch):
@@ -528,6 +571,25 @@ def test_settle_provisional_then_final_after_backfill(built, forward, monkeypatc
     assert _q(forward["led"], sql_w) == [("mature",)]
     n, d = _q(forward["led"], "SELECT count(*), count(DISTINCT forecast_id) FROM forward_outcomes")[0]
     assert n == d
+
+
+def test_contract_pins_formula_and_finality(built, monkeypatch):
+    p = built["panel"]
+    r = replay.cell_records(p, _cell("wti_rv5"), date(2026, 7, 18), "observed", settle=True,
+                            cutoff=data.as_of(p))[0]
+    assert r.contract["rv_annualize"] == 252 and r.contract["final_after_days"] == 28
+    assert r.contract["calendar_version"] == spec.CALENDAR_VERSION
+    monkeypatch.setattr(spec, "RV_ANNUALIZE", 365)
+    monkeypatch.setattr(spec, "SETTLE_FINAL_AFTER_DAYS", 1)
+    assert replay.settle_forward(p, r.contract, r.anchor_value)["y_first"] == r.y_first
+    old = {k: v for k, v in r.contract.items() if k != "rv_annualize"}
+    with pytest.raises(ValueError):
+        replay.settle_forward(p, old, r.anchor_value)
+
+
+def test_calendar_coverage_is_finite():
+    with pytest.raises(replay.CalendarCoverageError):
+        replay.plan(_cell("wti_r1"), date(2027, 12, 29), date(2027, 12, 31))
 
 
 def test_settle_uses_stored_contract_not_current_spec(built, monkeypatch):
