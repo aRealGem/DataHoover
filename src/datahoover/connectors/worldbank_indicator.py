@@ -70,13 +70,23 @@ def build_multi_indicator_url(
     per_page: int = 20000,
     source_id: int = 2,
     format: str = "json",
+    date: str | None = None,
 ) -> str:
     if not indicators:
         raise ValueError("Indicators list cannot be empty")
     indicator_list = ";".join(indicators)
     base = f"https://api.worldbank.org/v2/country/{country}/indicator/{indicator_list}"
-    query = urlencode({"format": format, "per_page": per_page, "source": source_id})
+    params = {"format": format, "per_page": per_page, "source": source_id}
+    if date:
+        params["date"] = date
+    query = urlencode(params)
     return f"{base}?{query}"
+
+
+def _configured_date(url: str) -> str | None:
+    """ISC-008 H2: carry the configured date bound (e.g. 2020:2026) into the built URL."""
+    vals = parse_qs(urlparse(url).query).get("date")
+    return vals[0] if vals else None
 
 
 def _parse_worldbank_response(payload: Any) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
@@ -128,7 +138,9 @@ def _normalize_entries(
         indicator = entry.get("indicator") or {}
         country = entry.get("country") or {}
         series_id = indicator.get("id") or "unknown"
-        country_id = country.get("id") or entry.get("countryiso3code") or "unknown"
+        # ISC-008 H1: the API's country.id is ISO2 ("US"); countryiso3code is ISO3 ("USA").
+        # The wide view labels this column iso3, so prefer the ISO3 code.
+        country_id = entry.get("countryiso3code") or country.get("id") or "unknown"
         year = entry.get("date")
         rows.append(
             {
@@ -166,7 +178,9 @@ def ingest_worldbank_indicator(
     source = sources[source_name]
     fetch_url = source.url
     if source.kind == "worldbank_macro_fiscal":
-        fetch_url = build_multi_indicator_url(country="all", indicators=MACRO_FISCAL_INDICATORS)
+        fetch_url = build_multi_indicator_url(
+            country="all", indicators=MACRO_FISCAL_INDICATORS, date=_configured_date(source.url)
+        )
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "raw" / source.name).mkdir(parents=True, exist_ok=True)
     (data_dir / "state").mkdir(parents=True, exist_ok=True)

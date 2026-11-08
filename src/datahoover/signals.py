@@ -421,15 +421,25 @@ def _worldbank_signals(
     db_path: Path,
 ) -> List[Dict[str, Any]]:
     _ensure_macro_fiscal_view(db_path)
-    cutoff_year = cutoff.year
+    # ISC-008 H3: annual WDI rows are never complete for the current year, and a
+    # missing input must not score as zero stress. Use, per country, the latest
+    # year (not after the computation year) where ALL four inputs are present;
+    # countries without such a year get no fiscal_stress signal at all.
+    computed_year = computed_at.year
     rows = con.execute(
         """
         SELECT iso3, year, debt_pct_gdp, net_lending_pct_gdp,
                revenue_ex_grants_pct_gdp, interest_payments_pct_gdp
-        FROM worldbank_macro_fiscal_wide
-        WHERE try_cast(year AS INTEGER) >= ?
+        FROM (
+          SELECT *, row_number() OVER (
+                   PARTITION BY iso3 ORDER BY try_cast(year AS INTEGER) DESC) AS rn
+          FROM worldbank_macro_fiscal_wide
+          WHERE try_cast(year AS INTEGER) <= ?
+            AND debt_pct_gdp IS NOT NULL AND net_lending_pct_gdp IS NOT NULL
+            AND revenue_ex_grants_pct_gdp IS NOT NULL AND interest_payments_pct_gdp IS NOT NULL
+        ) WHERE rn = 1
         """,
-        [cutoff_year],
+        [computed_year],
     ).fetchall()
     signals: List[Dict[str, Any]] = []
     # Collect distinct sources from worldbank_indicators table (view filters to 'worldbank_macro_fiscal')
@@ -447,10 +457,14 @@ def _worldbank_signals(
     for iso3, year, debt, net_lend, revenue, interest in rows:
         if iso3 is None or year is None:
             continue
-        debt_score = min(1.0, max(0.0, (_as_float(debt) or 0.0) / 120.0))
-        net_score = min(1.0, max(0.0, (-(_as_float(net_lend) or 0.0)) / 10.0))
-        revenue_score = min(1.0, max(0.0, (30.0 - (_as_float(revenue) or 0.0)) / 30.0))
-        interest_score = min(1.0, max(0.0, (_as_float(interest) or 0.0) / 10.0))
+        vals = [_as_float(debt), _as_float(net_lend), _as_float(revenue), _as_float(interest)]
+        if any(v is None for v in vals):
+            continue  # never substitute zero for a missing input
+        debt_f, net_f, rev_f, int_f = vals
+        debt_score = min(1.0, max(0.0, debt_f / 120.0))
+        net_score = min(1.0, max(0.0, -net_f / 10.0))
+        revenue_score = min(1.0, max(0.0, (30.0 - rev_f) / 30.0))
+        interest_score = min(1.0, max(0.0, int_f / 10.0))
         score = min(1.0, max(0.0, 0.4 * debt_score + 0.2 * net_score + 0.2 * revenue_score + 0.2 * interest_score))
         year_int = int(year)
         ts_start = datetime(year_int, 1, 1, tzinfo=timezone.utc)
