@@ -44,6 +44,9 @@ except ImportError:
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lcars_page  # noqa: E402  (scripts/lcars_page.py, ISC-057 presentation)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ROLLUP_TOML = REPO_ROOT / "published_rollup.toml"
 DEFAULT_DB = REPO_ROOT / "data" / "warehouse.duckdb"
@@ -84,25 +87,15 @@ def _lane_note() -> str:
 
 def _write_day_index(day_dir: Path, date_label: str, pdf_name: str) -> None:
     note = _lane_note()
-    body = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8"/>
-  <title>DataHoover sentiment — {html.escape(date_label)}</title>
-  <style>
-    body {{ font-family: system-ui, sans-serif; margin: 2rem; max-width: 52rem; }}
-    .muted {{ color: #555; font-size: 0.9rem; }}
-    pre {{ background: #f4f4f6; padding: 1rem; overflow: auto; font-size: 0.8rem; }}
-  </style>
-</head>
-<body>
-  <h1>Sentiment dashboard ({html.escape(date_label)})</h1>
-  <p><a href="{html.escape(pdf_name)}">{html.escape(pdf_name)}</a></p>
-  <p class="muted">{html.escape(note)}</p>
-  <pre>{html.escape(_attribution_block())}</pre>
-</body>
-</html>
-"""
+    main = (
+        f"  <h1>Sentiment dashboard ({html.escape(date_label)})</h1>\n"
+        f'  <section class="lc-panel"><p><a href="{html.escape(pdf_name)}">{html.escape(pdf_name)}</a></p>\n'
+        f'  <p class="muted">{html.escape(note)}</p>\n'
+        f"  <pre>{html.escape(_attribution_block())}</pre></section>"
+    )
+    body = lcars_page.page(
+        f"DataHoover sentiment — {date_label}", "DataHoover", "Sentiment · " + date_label,
+        [("All reports", "../"), ("Dashboards", "https://myfreakingstuff.com/doku.php?id=me:dashboards")], main)
     (day_dir / "index.html").write_text(body, encoding="utf-8")
 
 
@@ -161,7 +154,7 @@ def _write_roll_up_index(
         lis = "\n    ".join(
             f'<li><a href="{html.escape(h)}">{html.escape(t)}</a></li>' for t, h in manual_links
         )
-        blocks.append(f"  <h2>Canvas &amp; analytics PDFs</h2>\n  <ul>\n    {lis}\n  </ul>")
+        blocks.append(f'  <section class="lc-panel" id="pdfs"><h2>Canvas &amp; analytics PDFs</h2>\n  <ul class="lc-list">\n    {lis}\n  </ul></section>')
 
     sent_items = []
     for d in dates_desc:
@@ -170,22 +163,15 @@ def _write_roll_up_index(
             f'<a href="./{html.escape(d)}/sentiment-dashboard.pdf">sentiment-dashboard.pdf</a></li>'
         )
     sent_ul = "\n    ".join(sent_items) if sent_items else "<li>(no sentiment publishes yet)</li>"
-    blocks.append(f"  <h2>Sentiment dashboards</h2>\n  <ul>\n    {sent_ul}\n  </ul>")
+    strip = lcars_page.date_strip(dates_desc)
+    blocks.append(f'  <section class="lc-panel alt" id="sentiment"><h2>Sentiment dashboards</h2>\n  {strip}\n  <ul class="lc-list">\n    {sent_ul}\n  </ul></section>')
 
     body_main = "\n\n".join(blocks)
-    page = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8"/>
-  <title>DataHoover — published PDFs</title>
-</head>
-<body>
-  <h1>DataHoover — published PDFs</h1>
-
-{body_main}
-</body>
-</html>
-"""
+    page = lcars_page.page(
+        "DataHoover — published PDFs", "DataHoover", "Reports · published PDFs",
+        [("Analytics PDFs", "#pdfs"), ("Sentiment", "#sentiment"),
+         ("Dashboards", "https://myfreakingstuff.com/doku.php?id=me:dashboards")],
+        f"  <h1>DataHoover — published PDFs</h1>\n\n{body_main}")
     (published_root / "index.html").write_text(page, encoding="utf-8")
 
 
