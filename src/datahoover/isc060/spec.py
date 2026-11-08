@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, time, timedelta
 
-SPEC_VERSION = "0.7-draft"
+SPEC_VERSION = "0.8-draft"
 # Forecast mode refuses to run until the spec is frozen on the exchange page
 # and this flag is flipped in a reviewed commit.
 SPEC_FROZEN = False
@@ -76,11 +76,29 @@ US_HOLIDAYS = frozenset(date.fromisoformat(d) for d in (
     "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18",
     "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
 ))
-CALENDAR = {"wti": US_HOLIDAYS, "brent": US_HOLIDAYS, "hh": US_HOLIDAYS}
+# Brent (Run 0, FA-015): EIA's DCOILBRENTEU has data on 16 listed US holidays
+# and is absent on exactly the England & Wales bank holidays in 2024-04-30 ..
+# 2026-11-03 (Early May, Summer, Boxing Day, Easter Monday). So Brent uses the
+# England & Wales bank-holiday rules (https://www.gov.uk/bank-holidays): New
+# Year, Good Friday, Easter Monday, first and last Monday of May, last Monday of
+# August, Christmas and Boxing Day with weekend substitutes. Dates below are
+# computed from those rules (uncited list; the page could not be fetched
+# cleanly), and remain an EXPERIMENTAL calendar (CALENDAR_SOURCE stays None).
+UK_HOLIDAYS = frozenset(date.fromisoformat(d) for d in (
+    "2024-01-01", "2024-03-29", "2024-04-01", "2024-05-06", "2024-05-27", "2024-08-26",
+    "2024-12-25", "2024-12-26",
+    "2025-01-01", "2025-04-18", "2025-04-21", "2025-05-05", "2025-05-26", "2025-08-25",
+    "2025-12-25", "2025-12-26",
+    "2026-01-01", "2026-04-03", "2026-04-06", "2026-05-04", "2026-05-25", "2026-08-31",
+    "2026-12-25", "2026-12-28",
+    "2027-01-01", "2027-03-26", "2027-03-29", "2027-05-03", "2027-05-31", "2027-08-30",
+    "2027-12-27", "2027-12-28",
+))
+CALENDAR = {"wti": US_HOLIDAYS, "brent": UK_HOLIDAYS, "hh": US_HOLIDAYS}
 # Versioned, with finite coverage: a date outside it is an error, never a guess.
 # Applying this list to pre-2026-04-22 origins is a retrospective calendar
 # reconstruction and belongs to the exploratory group only.
-CALENDAR_VERSION = "us-exchange-holidays-2024-2027-v1"
+CALENDAR_VERSION = "us-exchange-uk-bank-holidays-2024-2027-v2"
 CALENDAR_COVERAGE = (date(2024, 1, 1), date(2027, 12, 31))
 # Gasoline (GASREGCOVW) is dated on the survey Monday even when the release
 # shifts; target = anchor date + 7k. Run 0 lists any non-Monday dates.

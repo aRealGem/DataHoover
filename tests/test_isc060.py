@@ -677,3 +677,25 @@ def test_cmd_settle_finality_reads_stored_days_not_current_spec(built, forward, 
     att = _q(forward["led"], "SELECT a.maturity FROM forward_settle_attempts a JOIN forward_forecasts f "
                              "USING (forecast_id) WHERE f.cell_id='wti_r1' AND f.baseline='B0'")
     assert att == [("missing",)]
+
+
+# Run 0 (extract 86ac2256..., 2026-11-08) calendar check for DCOILBRENTEU under
+# the v1 US list: weekdays absent from the data, and listed US holidays with data.
+RUN0_BRENT_ABSENT = ("2024-05-06 2024-08-26 2024-12-26 2025-04-21 2025-05-05 2025-08-25 "
+                     "2025-12-26 2026-04-06 2026-05-04 2026-08-31")
+RUN0_BRENT_US_HOLIDAYS_WITH_DATA = (
+    "2024-06-19 2024-07-04 2024-09-02 2024-11-28 2025-01-09 2025-01-20 2025-02-17 2025-06-19 "
+    "2025-07-04 2025-09-01 2025-11-27 2026-01-19 2026-02-16 2026-06-19 2026-07-03 2026-09-07")
+
+
+def test_brent_calendar_matches_run0_observations():
+    """FA-015: under the England & Wales calendar, every Run 0 Brent absence is a
+    holiday and no US-only holiday with Brent data is a holiday."""
+    absent = {date.fromisoformat(d) for d in RUN0_BRENT_ABSENT.split()}
+    with_data = {date.fromisoformat(d) for d in RUN0_BRENT_US_HOLIDAYS_WITH_DATA.split()}
+    assert all(not replay.is_print_day(("brent",), d) for d in absent)
+    assert all(replay.is_print_day(("brent",), d) for d in with_data)
+    # spread prints only when both legs print
+    assert not replay.is_print_day(("wti", "brent"), date(2024, 7, 4))
+    assert not replay.is_print_day(("wti", "brent"), date(2024, 8, 26))
+    assert replay.is_print_day(("wti",), date(2024, 8, 26))
