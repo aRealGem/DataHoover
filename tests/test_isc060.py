@@ -604,3 +604,76 @@ def test_settle_uses_stored_contract_not_current_spec(built, monkeypatch):
                                            "hh": frozenset()})
     oc = replay.settle_forward(p, stored, r.anchor_value)
     assert oc["target_date"] == r.target_date and oc["y_first"] == r.y_first
+
+
+def test_deadline_is_sunday_noon_local_on_dst_weekends():
+    """AB-010: wall-clock Sunday 12:00 ET, not +24 elapsed hours, on both 2026
+    DST-transition weekends (spring 03-08, fall 11-01)."""
+    spring, fall = date(2026, 3, 7), date(2026, 11, 1) - timedelta(days=1)
+    assert run.issue_deadline(spring) == datetime(2026, 3, 8, 16, 0, tzinfo=timezone.utc)   # 12:00 EDT
+    assert run.issue_deadline(fall) == datetime(2026, 11, 1, 17, 0, tzinfo=timezone.utc)    # 12:00 EST
+    # the elapsed-hours rule would have given 13:00 EDT and 11:00 EST
+    assert replay.issuance(spring) + timedelta(hours=24) == datetime(2026, 3, 8, 17, 0, tzinfo=timezone.utc)
+    assert replay.issuance(fall) + timedelta(hours=24) == datetime(2026, 11, 1, 16, 0, tzinfo=timezone.utc)
+    for o in (spring, fall, ORIGIN):
+        local = run.issue_deadline(o).astimezone(ZoneInfo(spec.ISSUANCE_TZ))
+        assert (local.weekday(), local.hour, local.minute) == (6, 12, 0)
+
+
+def test_weekly_grid_rejects_stray_off_weekday_row():
+    """AB-010: one Tuesday-dated gasoline row must not re-anchor the grid."""
+    mondays = [(date(2026, 9, 7) + timedelta(weeks=k), 3.0 + 0.01 * k) for k in range(8)]
+    assert all(d.weekday() == 0 for d, _ in replay.to_grid(mondays, ("gas",), weekly=True))
+    stray = mondays + [(mondays[-1][0] + timedelta(days=8), 3.2)]          # a Tuesday
+    with pytest.raises(replay.CalendarCadenceError):
+        replay.to_grid(stray, ("gas",), weekly=True)
+    mid = mondays[:3] + [(mondays[3][0] + timedelta(days=1), 3.1)] + mondays[4:]
+    with pytest.raises(replay.CalendarError):
+        replay.to_grid(mid, ("gas",), weekly=True)
+
+
+def test_weekly_cadence_violation_excludes_cell(built, monkeypatch):
+    p = built["panel"]
+    real = replay._info
+
+    def stray_info(panel, key, origin, group):
+        series, rt, reason = real(panel, key, origin, group)
+        if key == "gas" and series:
+            series = list(series) + [(series[-1][0] + timedelta(days=8), series[-1][1])]
+        return series, rt, reason
+    monkeypatch.setattr(replay, "_info", stray_info)
+    recs = replay.cell_records(p, _cell("gas_w1"), ORIGIN, "observed", settle=False, cutoff=None)
+    assert recs and all(r.status == "excluded" and "off weekday" in r.reason for r in recs)
+
+
+def test_uncited_calendar_makes_results_exploratory(built, monkeypatch):
+    p = built["panel"]
+    o = date(2026, 7, 18)
+    r = replay.cell_records(p, _cell("wti_r1"), o, "observed", settle=True, cutoff=data.as_of(p))[0]
+    assert r.evidence_class == "exploratory" and r.contract["calendar_evidence"] == {"wti": None}
+    assert {row["evidence_class"] for row in scoring.summarize([r])} == {"exploratory"}
+    monkeypatch.setattr(spec, "CALENDAR_SOURCE", {**spec.CALENDAR_SOURCE, "wti": "https://example.invalid/cal"})
+    r2 = replay.cell_records(p, _cell("wti_r1"), o, "observed", settle=True, cutoff=data.as_of(p))[0]
+    assert r2.evidence_class == "observed"
+    s = replay.cell_records(p, _cell("spread_d1"), o, "observed", settle=True, cutoff=data.as_of(p))[0]
+    assert s.evidence_class == "exploratory"                                  # brent still uncited
+    e = replay.cell_records(p, _cell("wti_r1"), date(2026, 4, 11), "exploratory", settle=True,
+                            cutoff=data.as_of(p))[0]
+    assert e.evidence_class == "exploratory"
+
+
+def test_cmd_settle_finality_reads_stored_days_not_current_spec(built, forward, monkeypatch):
+    """AB-010: after a policy change to 1 day, a forecast issued under 28 days
+    still stays provisional through cmd_settle."""
+    cutoff = replay.issuance(ORIGIN)
+    monkeypatch.setattr(run, "_now", lambda: cutoff + timedelta(hours=1))
+    assert run.main(["issue", "--warehouse", str(forward["early"]), *forward["base"]]) == 0
+    monkeypatch.setattr(spec, "SETTLE_FINAL_AFTER_DAYS", 1)
+    monkeypatch.setattr(run, "_now", lambda: datetime(2026, 11, 8, tzinfo=timezone.utc))
+    assert run.main(["settle", "--warehouse", str(built["wh"]), *forward["base"]]) == 0
+    sql = ("SELECT count(*) FROM forward_outcomes o JOIN forward_forecasts f USING (forecast_id) "
+           "WHERE f.cell_id='wti_r1' AND f.baseline='B0'")
+    assert _q(forward["led"], sql) == [(0,)]
+    att = _q(forward["led"], "SELECT a.maturity FROM forward_settle_attempts a JOIN forward_forecasts f "
+                             "USING (forecast_id) WHERE f.cell_id='wti_r1' AND f.baseline='B0'")
+    assert att == [("missing",)]

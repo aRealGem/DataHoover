@@ -8,8 +8,9 @@
               which the ledger allows once per spec version.
   issue       Forward forecasts for one Saturday origin (default: the latest one
               whose cutoff has passed). Insert-only; re-issue is refused. Must
-              commit before 00:00 ISSUANCE_TZ of the first target date; a later
-              request is refused unless --retrospective, which labels it so.
+              commit by 12:00 ISSUANCE_TZ wall clock on the Sunday after the
+              origin (spec.ISSUE_DEADLINE_*); a later request is refused unless
+              --retrospective, which labels it so.
   settle      Settles forward forecasts from their STORED contracts. Final
               outcomes are insert-only; provisional states are logged as attempts.
 
@@ -222,9 +223,11 @@ def latest_due_origin(now: datetime) -> date:
 
 
 def issue_deadline(origin: date) -> datetime:
-    """Commit deadline: the Saturday cutoff + spec.ISSUE_COMMIT_WINDOW (Sunday
-    12:00 ET), before the Sunday-evening futures open that informs Monday's spot."""
-    return replay.issuance(origin) + spec.ISSUE_COMMIT_WINDOW
+    """Commit deadline: Sunday 12:00 ISSUANCE_TZ wall clock (also on DST-transition
+    weekends), before the Sunday-evening futures open that informs Monday's spot."""
+    local = datetime.combine(origin + timedelta(days=spec.ISSUE_DEADLINE_DAYS),
+                             spec.ISSUE_DEADLINE_TIME, tzinfo=ZoneInfo(spec.ISSUANCE_TZ))
+    return local.astimezone(timezone.utc)
 
 
 def cmd_issue(args) -> int:

@@ -64,6 +64,7 @@ def summarize(records, *, value: str = "y_first") -> list[dict]:
                   and getattr(r, value) is not None]
         row = {
             "group": group, "sealed": sealed, "cell_id": cell, "baseline": base, "value": value,
+            "evidence_class": rs[0].evidence_class,
             "n_origins": len(rs), "n_scored": len(scored),
             "n_excluded": sum(r.status == "excluded" for r in rs),
             "n_abstain": sum(r.status == "abstain" for r in rs),

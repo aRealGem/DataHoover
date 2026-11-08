@@ -84,8 +84,16 @@ def _keys(cell) -> tuple[str, ...]:
     return ("wti", "brent") if cell.kind == "spread" else (cell.key,)
 
 
-class CalendarCoverageError(ValueError):
+class CalendarError(ValueError):
+    """Any calendar failure; the cell is excluded with the message as reason."""
+
+
+class CalendarCoverageError(CalendarError):
     pass
+
+
+class CalendarCadenceError(CalendarError):
+    """Observed weekly dates contradict the pinned weekday convention."""
 
 
 def is_print_day(keys, d: date) -> bool:
@@ -106,6 +114,14 @@ def to_grid(series: Series, keys, weekly: bool) -> list:
     vals = dict(series)
     first, last = series[0][0], series[-1][0]
     if weekly:
+        wd = {spec.WEEKLY_WEEKDAY[k] for k in keys}
+        if len(wd) != 1:
+            raise CalendarCadenceError(f"no single weekly weekday for {keys}")
+        (wd,) = wd
+        off = [d for d, _ in series if d.weekday() != wd]
+        if off:
+            raise CalendarCadenceError(
+                f"{len(off)} weekly date(s) off weekday {wd}, latest {max(off)}")
         n = (last - first).days // 7
         dates = [last - timedelta(weeks=k) for k in range(n, -1, -1)]
     else:
@@ -173,7 +189,16 @@ def _pinned(pl: dict) -> dict:
     if pl["window"][-1] > spec.CALENDAR_COVERAGE[1]:
         raise CalendarCoverageError(f"{pl['window'][-1]} outside calendar {spec.CALENDAR_VERSION}")
     return {**pl, "spec_version": spec.SPEC_VERSION, "calendar_version": spec.CALENDAR_VERSION,
+            "calendar_evidence": {k: spec.CALENDAR_SOURCE.get(k) for k in pl["keys"]},
             "rv_annualize": spec.RV_ANNUALIZE, "final_after_days": spec.SETTLE_FINAL_AFTER_DAYS}
+
+
+def evidence_class(group: str, keys) -> str:
+    """Evidence class of a result (AB-010): 'exploratory' for the exploratory
+    group or when any series' assessment calendar is uncited; else the group."""
+    if group == "exploratory" or any(spec.CALENDAR_SOURCE.get(k) is None for k in keys):
+        return "exploratory"
+    return group
 
 
 # --- outcomes -----------------------------------------------------------------
@@ -285,6 +310,7 @@ class Record:
     k_realized: int | None = None
     y_first: float | None = None
     y_latest: float | None = None
+    evidence_class: str | None = None  # see evidence_class()
     maturity: str | None = None      # mature | immature | missing | timing_uncertain | unscorable | sealed
 
 
@@ -337,7 +363,8 @@ def _forecast(cell, series: Series, pl: dict) -> dict:
 def cell_records(panel: Panel, cell, origin: date, group: str, *, settle: bool,
                  cutoff: datetime | None, sealed: bool = False) -> list[Record]:
     names = BASELINES[cell.kind]
-    base = dict(origin=origin, group=group, cell_id=cell.cell_id, sealed=sealed)
+    base = dict(origin=origin, group=group, cell_id=cell.cell_id, sealed=sealed,
+                evidence_class=evidence_class(group, _keys(cell)))
     ids = {n: forecast_id(origin, cell.cell_id, n) for n in names}
     if cell.kind == "spread":
         sw, rw, ew = _info(panel, "wti", origin, group)
@@ -352,7 +379,7 @@ def cell_records(panel: Panel, cell, origin: date, group: str, *, settle: bool,
     if reason is None:
         try:
             grid = to_grid(series or [], _keys(cell), weekly=cell.kind == "weekly_logret")
-        except CalendarCoverageError as e:
+        except CalendarError as e:
             reason = str(e)
     if reason is None and not grid:
         reason = "empty info set"
@@ -361,7 +388,7 @@ def cell_records(panel: Panel, cell, origin: date, group: str, *, settle: bool,
         anchor, anchor_value = grid[-1]
         try:
             pl = plan(cell, anchor, origin)
-        except CalendarCoverageError as e:
+        except CalendarError as e:
             reason = str(e)
     if reason is not None:
         return [Record(**base, baseline=n, forecast_id=ids[n], status="excluded", reason=reason,
@@ -424,13 +451,14 @@ def issue(panel: Panel, origin: date) -> list[Record]:
 
 
 CONTRACT_FIELDS = ("kind", "keys", "target", "window", "spec_version", "calendar_version",
-                   "rv_annualize", "final_after_days")
+                   "calendar_evidence", "rv_annualize", "final_after_days")
 
 
 def contract_json(pl: dict) -> dict:
     return {"kind": pl["kind"], "keys": list(pl["keys"]), "target": str(pl["target"]),
             "window": [str(d) for d in pl["window"]], "spec_version": pl["spec_version"],
-            "calendar_version": pl["calendar_version"], "rv_annualize": pl["rv_annualize"],
+            "calendar_version": pl["calendar_version"],
+            "calendar_evidence": dict(pl["calendar_evidence"]), "rv_annualize": pl["rv_annualize"],
             "final_after_days": pl["final_after_days"]}
 
 

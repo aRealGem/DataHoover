@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, time, timedelta
 
-SPEC_VERSION = "0.6-draft"
+SPEC_VERSION = "0.7-draft"
 # Forecast mode refuses to run until the spec is frozen on the exchange page
 # and this flag is flipped in a reviewed commit.
 SPEC_FROZEN = False
@@ -60,9 +60,12 @@ HOLDOUT_ID = "isc060-g1-oil-holdout-2026-08-15x13"
 # baselines, which index observed rows. Daily oil/gas spot prints = weekdays
 # minus the US exchange holidays below (NYSE/NYMEX list, uncited, from
 # published exchange schedules; 2025-01-09 national day of mourning included).
-# PROVISIONAL for Brent: EIA's Brent spot may follow other closures. Run 0
-# prints, per series, weekdays absent from the data and listed holidays that do
-# have data; v1.0 freezes only after those match or the list is amended.
+# This list is evidence of EXCHANGE closures, not of EIA assessment dates
+# (AB-010). Run 0 prints, per series, weekdays absent from the data and listed
+# holidays that have data; it can expose contradictions, it cannot establish the
+# calendar. CALENDAR_SOURCE below records, per series, a cited assessment
+# convention; until one is cited, every result for that series is EXPLORATORY
+# evidence class, whatever its information-set group (scoring.summarize).
 US_HOLIDAYS = frozenset(date.fromisoformat(d) for d in (
     "2024-01-01", "2024-01-15", "2024-02-19", "2024-03-29", "2024-05-27", "2024-06-19",
     "2024-07-04", "2024-09-02", "2024-11-28", "2024-12-25",
@@ -81,18 +84,26 @@ CALENDAR_VERSION = "us-exchange-holidays-2024-2027-v1"
 CALENDAR_COVERAGE = (date(2024, 1, 1), date(2027, 12, 31))
 # Gasoline (GASREGCOVW) is dated on the survey Monday even when the release
 # shifts; target = anchor date + 7k. Run 0 lists any non-Monday dates.
+# Fail closed (AB-010): any observed gasoline date off this weekday makes the
+# grid an error and the cell is excluded; the cadence is never re-anchored.
 WEEKLY_WEEKDAY = {"gas": 0}
+# Per-series cited source for the assessment calendar (URL + what it supports),
+# None = uncited. Pinned per forecast in its contract as calendar_evidence.
+CALENDAR_SOURCE: dict[str, str | None] = {"wti": None, "brent": None, "hh": None, "gas": None}
 
 # Forward issuance latency (AB-009). Targets are EIA spot assessments published
 # via FRED, informed by futures sessions; CME's WTI overview gives the Sunday
 # open as 17:00 CT = 18:00 ET (https://www.cmegroup.com/education/courses/
 # introduction-to-energy/introduction-to-crude-oil/wti-overview). The issue
-# must COMMIT within ISSUE_COMMIT_WINDOW of the Saturday cutoff, i.e. by Sunday
-# 12:00 ET, six hours before that open (ICE Brent's Sunday open is not earlier,
-# uncited). The forecast is for the move from the info-set anchor; prints between
-# anchor and issuance are already realized but unseen, which is part of the
-# stated estimand (m = gap + h). Later requests are "retrospective".
-ISSUE_COMMIT_WINDOW = timedelta(hours=24)
+# must COMMIT by ISSUE_DEADLINE_TIME local ISSUANCE_TZ on the Sunday after the
+# origin: a wall-clock deadline, chosen over "+24 elapsed hours" (AB-010) so it
+# is 12:00 ET on DST-transition weekends too, six hours before that open (ICE
+# Brent's Sunday open is not earlier, uncited). The forecast is for the move
+# from the info-set anchor; prints between anchor and issuance are already
+# realized but unseen, which is part of the stated estimand (m = gap + h).
+# Later requests are "retrospective".
+ISSUE_DEADLINE_DAYS = 1
+ISSUE_DEADLINE_TIME = time(12, 0)
 # Settlement finality: "missing"/"timing_uncertain" stay provisional until the
 # scoring cutoff is this many days past the target window end. Pinned per
 # forecast in its contract, with the RV formula, at issue time.
