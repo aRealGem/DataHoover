@@ -1,6 +1,7 @@
 """ISC-060 G1 forecasting harness (baselines only).
 
-Spec: https://myfreakingstuff.com/doku.php?id=ops:forbin-isc:exchange-060 (FA-008 + AB-005, draft v0.3).
+Spec: https://myfreakingstuff.com/doku.php?id=ops:forbin-isc:exchange-060 (spec 1.0 freeze candidate, FA-016;
+exploratory only, see spec.FREEZE).
 
 Design constraints:
   * stdlib + duckdb only, so it runs in the existing DataHoover venv with no install;

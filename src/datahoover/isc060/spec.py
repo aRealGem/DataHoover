@@ -5,10 +5,46 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, time, timedelta
 
-SPEC_VERSION = "0.8-draft"
+SPEC_VERSION = "1.0"
 # Forecast mode refuses to run until the spec is frozen on the exchange page
-# and this flag is flipped in a reviewed commit.
-SPEC_FROZEN = False
+# and this flag is flipped in a reviewed commit. v1.0 freeze CANDIDATE
+# (FA-016): frozen only once AB accepts this commit on exchange-060.
+SPEC_FROZEN = True
+
+# Freeze declaration (AB-011, AB-012). G1 is EXPLORATORY ONLY: descriptive
+# baselines and an auditable forward record under an experimental, data-informed
+# calendar. No skill, calibration, trading or contender-promotion verdict.
+FREEZE = {
+    "evidence_scope": "exploratory under frozen experimental calendar",
+    "calendar_version": "us-exchange-uk-bank-holidays-2024-2027-v2",
+    "calendar_basis": "US exchange holidays (WTI, Henry Hub); England & Wales bank-holiday "
+                      "rules (Brent), data-informed by Run 0; not publisher evidence",
+    # Run 0 was run under spec 0.7-draft / calendar v1; its availability code is
+    # unchanged in 1.0. Report text: ops:forbin-isc:exchange-060-run0.
+    "run0": {
+        "code_head": "29a45b82ef14dc84b772d2710f04721f4fe853a7",
+        "spec_version": "0.7-draft",
+        "report_sha256": "0b966f134a446ad5c3586cfafebb67661209e77c82d69e9dd3deb9bea86b290e",
+        "extract_sha256": "86ac22569807a43956cb8226a213cadc93a1d011061e50a3174df12619e84e42",
+        "env_inventory_sha256": "7f9abd389653801dbdb00b36b6c7a3e699dede2426cd126ea25ee18fd560298b",
+        "warehouse_copy_sha256": "10fb70b80215c96b20c93fd9db7093510f06ee2fc0c6e1bf345b74afa7a26992",
+    },
+    # INPUT eligibility only (run.eligibility -> _info): not per-cell forecast
+    # or mature-score counts, which come from the first baseline pass.
+    "observed_candidate_origins": 28,
+    "observed_input_eligible_per_series": 19,
+    "observed_input_excluded_per_series": {"stale snapshot": 8, "no proven snapshot": 1},
+    # 2026-11-07 is sealed but outside the replay: as_of 11-07 13:15Z precedes
+    # its 17:00Z issuance, so build_origins ends at 10-31.
+    "sealed_origins_in_replay": 12,
+    "known_calendar_mismatches": {
+        "discarded_real_prints": {"hh": ["2025-01-09"]},
+        "scheduled_but_absent": {
+            "wti": ["2024-10-14", "2024-11-11", "2025-10-13", "2025-11-11"],
+            "hh": ["2024-10-14", "2025-11-11", "2025-11-28", "2025-12-26", "2026-01-02"],
+        },
+    },
+}
 
 SOURCE = "fred_macro_watchlist"
 SERIES = {

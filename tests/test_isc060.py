@@ -423,6 +423,7 @@ def test_summarize_counts_and_seal(built):
 
 def test_gates_refuse(built, tmp_path, monkeypatch):
     args = ["--warehouse", str(built["wh"]), "--workdir", str(tmp_path)]
+    monkeypatch.setattr(spec, "SPEC_FROZEN", False)
     for cmd in ("backtest", "issue", "settle"):
         assert run.main([cmd, *args]) == 2
     monkeypatch.setattr(spec, "SPEC_FROZEN", True)
@@ -699,3 +700,18 @@ def test_brent_calendar_matches_run0_observations():
     assert not replay.is_print_day(("wti", "brent"), date(2024, 7, 4))
     assert not replay.is_print_day(("wti", "brent"), date(2024, 8, 26))
     assert replay.is_print_day(("wti",), date(2024, 8, 26))
+
+
+def test_freeze_declaration_is_consistent():
+    assert spec.SPEC_FROZEN and spec.SPEC_VERSION == "1.0"
+    assert spec.FREEZE["calendar_version"] == spec.CALENDAR_VERSION
+    assert spec.FREEZE["evidence_scope"].startswith("exploratory")
+    assert all(v is None for v in spec.CALENDAR_SOURCE.values())       # nothing upgraded
+    mm = spec.FREEZE["known_calendar_mismatches"]
+    for k, ds in mm["discarded_real_prints"].items():
+        assert all(not replay.is_print_day((k,), date.fromisoformat(d)) for d in ds)
+    for k, ds in mm["scheduled_but_absent"].items():
+        assert all(replay.is_print_day((k,), date.fromisoformat(d)) for d in ds)
+    assert spec.FREEZE["observed_input_eligible_per_series"] + sum(
+        spec.FREEZE["observed_input_excluded_per_series"].values()) == spec.FREEZE["observed_candidate_origins"]
+    assert spec.FREEZE["sealed_origins_in_replay"] == len(spec.SEALED_ORIGINS) - 1
