@@ -49,6 +49,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import platform
 import random
 import sys
@@ -458,7 +459,9 @@ def paired(records, pair: tuple[str, str], *, value: str = "y_first") -> list[di
                 "spans": [len(s) for s in spans(ors)],
                 "nonoverlapping_windows": nonoverlapping_count(ivs),
                 "mean_diff_ci90_descriptive": ci,
-                "mde90_descriptive": None if ci is None else (ci[1] - ci[0]) / 2,
+                # Half-width of a descriptive interval; NOT a minimum detectable effect
+                # (no declared alternative, power target or validated method; AB-018).
+                "ci90_half_width_descriptive": None if ci is None else (ci[1] - ci[0]) / 2,
                 "coverage": {nm: {k: sum(p[side][k] for p in pr) / n for k in pr[0][side]}
                              for nm, side in ((a_name, "a"), (b_name, "b"))},
             })
@@ -624,7 +627,9 @@ def report(recs: list, *, extract_sha: str, code: dict, env: dict) -> dict:
                                         "date within it, not per-training-date vintages",
                    "holdout": "origin-level sealing plus outcome purge; not an untouched chronological "
                               "period; G1 already reported boundary-crossing outcomes",
-                   "evidence": "exploratory screening; intervals descriptive; no skill or calibration claim"},
+                   "evidence": "exploratory screening; intervals descriptive; no skill or calibration claim",
+                   "power": "no power or MDE analysis; seven observed origins cannot substantiate "
+                            "or rule out an effect"},
         "decision": {t: carry_decision(t, pairs) for t in PAIRS},
         "pairs_y_first": pairs, "sensitivity_y_latest": sens,
         "records": [asdict(r) for r in recs],
@@ -660,7 +665,13 @@ def main(argv=None) -> int:
         print(f"REFUSED: needs a clean, known commit ({code}).", file=sys.stderr)
         return 2
     lock.parent.mkdir(parents=True, exist_ok=True)
-    lock.write_text(json.dumps({"trial_id": TRIAL_ID, "code": code, "extract_sha256": sha}))
+    try:
+        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError:
+        print(f"REFUSED: trial {TRIAL_ID} already started ({lock}).", file=sys.stderr)
+        return 2
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps({"trial_id": TRIAL_ID, "code": code, "extract_sha256": sha}))
     env = {"python": platform.python_version(),
            "env_inventory_sha256": g1run.env_inventory(Path(args.workdir))}
     rep = report(dev_records(data.load_extract(blob)), extract_sha=sha, code=code, env=env)
