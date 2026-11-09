@@ -14,7 +14,13 @@ UTC, so the cutoff never moves while a run resumes):
   * per series, once per run: series, series/release and release/sources metadata
     (title, units, frequency, seasonal adjustment, release, sources, notes).
 Every request states its defaults explicitly (file_type json, units lin, output_type 1,
-order_by observation_date, sort_order asc, observation range 1776-07-04..9999-12-31).
+sort_order asc, observation range 1776-07-04..9999-12-31); every page must echo them.
+
+Rights gate (AB-021): FRED's API terms restrict storing/archiving content and use in
+connection with ML training (https://fred.stlouisfed.org/legal/ API items k, l, m).
+Observation downloads therefore refuse to run without a recorded rights/intended-use
+clearance reference; ``--metadata-only`` stages metadata alone. Metadata is validated
+against series identity and as-of, fingerprinted, and re-verified by ``verify``.
 
 Acquisition contract (AB-020, ISC-060):
   * A contract = tool version, schema version, endpoint, series, mode, as-of and the
@@ -86,8 +92,8 @@ import httpx
 
 from ..redact import redact
 
-TOOL_VERSION = "fred-backfill-0.2"
-SCHEMA_VERSION = 2
+TOOL_VERSION = "fred-backfill-0.3"
+SCHEMA_VERSION = 3
 API = "https://api.stlouisfed.org/fred"
 ENDPOINT = f"{API}/series/observations"
 PAGE_LIMIT = 100000
@@ -98,9 +104,12 @@ MISSING = "."
 CHUNK = 8192
 USER_AGENT = "DataHoover/history-backfill (+https://github.com/aRealGem/DataHoover)"
 OBS_KEYS = ("date", "value", "realtime_start", "realtime_end")
-# Echoed query fields that must equal the request on the first page, then stay pinned.
-ECHO_MUST_MATCH = ("realtime_start", "realtime_end", "units", "output_type", "sort_order", "limit")
-ECHO_PINNED = ECHO_MUST_MATCH + ("observation_start", "observation_end", "order_by", "file_type")
+# Echoed query fields every observations page must carry and that must equal the request
+# (AB-021 item 3). order_by is not a documented request parameter: it is not sent, only
+# pinned across pages when the provider echoes it.
+ECHO_REQUIRED = ("realtime_start", "realtime_end", "observation_start", "observation_end",
+                 "units", "output_type", "file_type", "sort_order", "limit")
+ECHO_PINNED = ECHO_REQUIRED + ("order_by",)
 REALTIME_CAVEAT = ("ALFRED realtime dates can be original-source, vendor or first-FRED-availability "
                    "dates; they are vintage history, not intraday first-seen timestamps")
 
@@ -123,6 +132,10 @@ class BudgetExceeded(RuntimeError):
 
 class LockHeld(RuntimeError):
     pass
+
+
+class PathEscape(RuntimeError):
+    """A path would leave the staging root (absolute, traversal or symlink component)."""
 
 
 def _sha(data: bytes) -> str:
@@ -190,12 +203,43 @@ def contract(series_id: str, mode: str, as_of: str) -> dict:
         raise ValueError(f"unknown mode {mode!r}")
     _iso(as_of, "as_of")
     params = {"series_id": safe_id(series_id), "file_type": "json", "units": "lin",
-              "output_type": "1", "order_by": "observation_date", "sort_order": "asc",
+              "output_type": "1", "sort_order": "asc",
               "limit": str(PAGE_LIMIT), "observation_start": OBS_RANGE[0],
               "observation_end": OBS_RANGE[1],
               "realtime_start": as_of if mode == "latest" else EARLIEST, "realtime_end": as_of}
     c = {"tool_version": TOOL_VERSION, "schema_version": SCHEMA_VERSION, "endpoint": ENDPOINT,
          "series_id": series_id, "mode": mode, "as_of": as_of, "params": params}
+    c["fingerprint"] = _sha(_canon(c))
+    return c
+
+
+def contract_problem(c: object, expected: dict | None = None) -> str | None:
+    """Why a stored contract cannot be trusted, or None. Recomputes the fingerprint and
+    rebuilds the contract from its own identity, so edited params or ids fail closed."""
+    if not isinstance(c, dict):
+        return "missing contract"
+    try:
+        rebuilt = contract(c["series_id"], c["mode"], c["as_of"])
+    except (KeyError, TypeError, ValueError, SchemaError) as exc:
+        return f"contract identity invalid: {exc}"
+    body = {k: v for k, v in c.items() if k != "fingerprint"}
+    if _sha(_canon(body)) != c.get("fingerprint"):
+        return "contract fingerprint does not match its content"
+    if c != rebuilt:
+        return "contract differs from the one this tool builds for its identity"
+    if expected is not None and c != expected:
+        return "contract differs from the requested contract"
+    return None
+
+
+def meta_contract(series_id: str, as_of: str) -> dict:
+    _iso(as_of, "as_of")
+    rt = {"realtime_start": as_of, "realtime_end": as_of, "file_type": "json"}
+    c = {"tool_version": TOOL_VERSION, "schema_version": SCHEMA_VERSION, "kind": "metadata",
+         "series_id": safe_id(series_id), "as_of": as_of,
+         "requests": {"series": [f"{API}/series", {"series_id": series_id, **rt}],
+                      "release": [f"{API}/series/release", {"series_id": series_id, **rt}],
+                      "sources": [f"{API}/release/sources", {"release_id": "<from release>", **rt}]}}
     c["fingerprint"] = _sha(_canon(c))
     return c
 
@@ -218,10 +262,14 @@ def validate_page(payload: object, *, offset: int, params: dict | None = None) -
     if got_offset != offset:
         raise SchemaError(f"offset {got_offset} != requested {offset}")
     echo = {k: str(payload[k]) for k in ECHO_PINNED if k in payload}
+    win = None
     if params is not None:
-        for k in ECHO_MUST_MATCH:
-            if k in echo and echo[k] != str(params[k]):
+        for k in ECHO_REQUIRED:
+            if k not in echo:
+                raise SchemaError(f"page does not echo required field {k}")
+            if echo[k] != str(params[k]):
                 raise SchemaError(f"echoed {k}={echo[k]!r} != requested {params[k]!r}")
+        win = (date.fromisoformat(params["realtime_start"]), date.fromisoformat(params["realtime_end"]))
     keys, dates, rts = [], [], []
     for i, o in enumerate(obs):
         n = offset + i
@@ -232,6 +280,9 @@ def validate_page(payload: object, *, offset: int, params: dict | None = None) -
         re_ = _iso(o["realtime_end"], f"observation {n} realtime_end")
         if rs > re_:
             raise SchemaError(f"observation {n} realtime_start after realtime_end")
+        if win is not None and (rs > win[1] or re_ < win[0]):
+            raise SchemaError(f"observation {n} realtime period {rs}..{re_} outside requested "
+                              f"{win[0]}..{win[1]}")
         if not _value_ok(o["value"]):
             raise SchemaError(f"observation {n} value {o['value']!r} is neither finite nor {MISSING!r}")
         keys.append((o["date"], o["realtime_start"]))
@@ -304,9 +355,34 @@ def _fsync_dir(d: Path) -> None:
         os.close(fd)
 
 
-def _write_new(path: Path, data: bytes) -> None:
-    """Create ``path`` with ``data``; never replace an existing file (hard-link is atomic no-clobber)."""
+def _contained(out: Path, rel: object) -> Path:
+    """``out / rel`` only if rel is a plain relative path with no traversal and no existing
+    symlink component inside the staging root (AB-021 item 5)."""
+    if not isinstance(rel, str) or not rel or "\0" in rel:
+        raise PathEscape(f"bad manifest path {rel!r}")
+    rp = Path(rel)
+    if rp.is_absolute() or any(part in ("..", "") for part in rp.parts):
+        raise PathEscape(f"path {rel!r} is absolute or traverses")
+    root = Path(out)
+    if root.is_symlink():
+        raise PathEscape(f"staging root {root} is a symlink")
+    cur = root
+    for part in rp.parts:
+        cur = cur / part
+        if cur.is_symlink():
+            raise PathEscape(f"{cur} is a symlink inside the staging root")
+    rr = root.resolve()
+    tgt = cur.resolve()
+    if tgt != rr and rr not in tgt.parents:
+        raise PathEscape(f"{rel!r} resolves outside {rr}")
+    return cur
+
+
+def _write_new(out: Path, rel: str, data: bytes) -> None:
+    """Create out/rel with ``data``; never replace an existing file (hard-link is atomic no-clobber)."""
+    path = _contained(out, rel)
     path.parent.mkdir(parents=True, exist_ok=True)
+    path = _contained(out, rel)  # re-check after mkdir
     tmp = path.parent / f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
     try:
@@ -387,6 +463,15 @@ class Budget:
     bytes: int = 0
     _last: float | None = field(default=None, repr=False)
 
+    def __post_init__(self):
+        for name in ("max_requests", "max_bytes"):
+            v = getattr(self, name)
+            if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+                raise ValueError(f"{name} must be a non-negative integer, got {v!r}")
+        v = self.min_interval_s
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0:
+            raise ValueError(f"min_interval_s must be finite and >= 0, got {v!r}")
+
     def remaining(self) -> int:
         return self.max_bytes - self.bytes
 
@@ -411,7 +496,8 @@ class Fetcher:
     sleep: Callable[[float], None] = time.sleep
 
     def get(self, url: str, params: dict) -> tuple[int, dict, bytes, str]:
-        """Bounded, fully charged GET. Raises BudgetExceeded before storing anything past the cap."""
+        """Fully charged GET with a STORED-body cap: reading stops at the first chunk past the
+        cap and nothing past it is kept; network bytes can exceed the cap by one chunk."""
         self.budget.before_request(self.clock, self.sleep)
         req = self.client.build_request("GET", url, params={**params, "api_key": self.api_key},
                                         headers={"User-Agent": USER_AGENT})
@@ -438,7 +524,7 @@ def _page_entry(rel: str, data: bytes, retrieved: str, headers: dict, **extra) -
 def _quarantine(out: Path, attempt_id: str, name: str, data: bytes, retrieved: str,
                 headers: dict, status: int, reason: str) -> dict:
     rel = f"quarantine/{attempt_id}/{name}"
-    _write_new(out / rel, data)
+    _write_new(out, rel, data)
     return _page_entry(rel, data, retrieved, headers, http_status=status, reason=redact(reason))
 
 
@@ -469,11 +555,11 @@ def fetch_series_mode(f: Fetcher, c: dict, *, out: Path, run_id: str) -> dict:
                                                f"{type(exc).__name__}: {exc}"))
                 raise AttemptAborted(f"invalid page at offset {seq.offset}: {exc}") from None
             rel = f"{base_dir}/{name}"
-            _write_new(out / rel, data)
+            _write_new(out, rel, data)
             pages.append(_page_entry(rel, data, retrieved, headers, offset=seq.offset, rows=facts["rows"]))
             if seq.add(facts):
                 break
-    except (AttemptAborted, BudgetExceeded, ImmutableConflict, httpx.HTTPError) as exc:
+    except (AttemptAborted, BudgetExceeded, ImmutableConflict, PathEscape, httpx.HTTPError) as exc:
         rec.update(status="aborted", reason=redact(f"{type(exc).__name__}: {exc}"),
                    budget_stop=isinstance(exc, BudgetExceeded), **seq.summary(),
                    recorded_at_utc=_utc_now())
@@ -482,65 +568,132 @@ def fetch_series_mode(f: Fetcher, c: dict, *, out: Path, run_id: str) -> dict:
     return rec
 
 
-def _first(payload: dict, key: str) -> dict:
-    items = payload.get(key) if isinstance(payload, dict) else None
-    return items[0] if isinstance(items, list) and items and isinstance(items[0], dict) else {}
+def _items(payload: object, key: str, what: str) -> list[dict]:
+    if not isinstance(payload, dict):
+        raise SchemaError(f"{what}: not a JSON object")
+    if payload.get("error_code") is not None or payload.get("error_message") is not None:
+        raise SchemaError(f"{what}: provider error {payload.get('error_code')}")
+    items = payload.get(key)
+    if not isinstance(items, list) or not items or not all(isinstance(x, dict) for x in items):
+        raise SchemaError(f"{what}: missing non-empty {key} list")
+    return items
+
+
+def _need_str(d: dict, k: str, what: str) -> str:
+    v = d.get(k)
+    if not isinstance(v, str) or not v.strip():
+        raise SchemaError(f"{what}: missing {k}")
+    return v
+
+
+def derive_metadata(series_id: str, as_of: str, bodies: dict[str, bytes]) -> dict:
+    """Validate the three metadata responses against identity and as-of, and derive the
+    stored fields. Used at fetch time and again by verify (AB-021 item 1)."""
+    try:
+        s = _items(json.loads(bodies["series"]), "seriess", "series")[0]
+        r = _items(json.loads(bodies["release"]), "releases", "series/release")[0]
+        srcs = _items(json.loads(bodies["sources"]), "sources", "release/sources")
+    except KeyError as exc:
+        raise SchemaError(f"metadata response {exc} missing") from None
+    except ValueError as exc:
+        if isinstance(exc, SchemaError):
+            raise
+        raise SchemaError(f"metadata response is not JSON: {exc}") from None
+    if s.get("id") != series_id:
+        raise SchemaError(f"series id {s.get('id')!r} != requested {series_id!r}")
+    for what, d in (("series", s), ("release", r)):
+        if d.get("realtime_start") != as_of or d.get("realtime_end") != as_of:
+            raise SchemaError(f"{what} realtime {d.get('realtime_start')}..{d.get('realtime_end')} "
+                              f"!= as_of {as_of}")
+    notes = s.get("notes") if isinstance(s.get("notes"), str) else ""
+    return {"title": _need_str(s, "title", "series"), "units": _need_str(s, "units", "series"),
+            "frequency": _need_str(s, "frequency", "series"),
+            "seasonal_adjustment": _need_str(s, "seasonal_adjustment", "series"),
+            "observation_start": s.get("observation_start"), "observation_end": s.get("observation_end"),
+            "last_updated": s.get("last_updated"),
+            "release": {"id": _int(r.get("id"), "release id"), "name": _need_str(r, "name", "release"),
+                        "link": r.get("link") if isinstance(r.get("link"), str) else None},
+            "sources": [{"name": _need_str(x, "name", "source"),
+                         "link": x.get("link") if isinstance(x.get("link"), str) else None} for x in srcs],
+            "notes_sha256": _sha(notes.encode()),
+            "notes_mention_rights": any(w in notes.lower() for w in
+                                        ("copyright", "©", "permission", "license", "licence"))}
 
 
 def fetch_metadata(f: Fetcher, series_id: str, as_of: str, *, out: Path, run_id: str) -> dict:
-    """Series, release and source metadata, raw-preserved. Rights stay 'unreviewed'."""
+    """Series, release and source metadata, raw-preserved and validated. Rights stay 'unreviewed'."""
+    mc = meta_contract(series_id, as_of)
     attempt_id = _new_id("meta")
-    rt = {"realtime_start": as_of, "realtime_end": as_of, "file_type": "json"}
     rec = {"kind": "metadata", "run_id": run_id, "attempt_id": attempt_id, "series_id": series_id,
-           "as_of": as_of, "pages": [], "rights_status": "unreviewed", "recorded_at_utc": None}
+           "as_of": as_of, "contract": mc, "fingerprint": mc["fingerprint"], "pages": [],
+           "rights_status": "unreviewed"}
+    bodies: dict[str, bytes] = {}
     try:
-        got = {}
-        steps = [("series", f"{API}/series", {"series_id": series_id}),
-                 ("release", f"{API}/series/release", {"series_id": series_id})]
-        for name, url, extra in steps:
-            status, headers, data, retrieved = f.get(url, {**extra, **rt})
-            rel = f"raw/fred/{series_id}/meta/{attempt_id}/{name}.json"
-            _write_new(out / rel, data)
-            rec["pages"].append(_page_entry(rel, data, retrieved, headers, http_status=status))
+        for name in ("series", "release", "sources"):
+            url, params = mc["requests"][name]
+            if name == "sources":
+                rel_id = _items(json.loads(bodies["release"]), "releases", "series/release")[0].get("id")
+                params = {**params, "release_id": str(_int(rel_id, "release id"))}
+            status, headers, data, retrieved = f.get(url, params)
+            rel = f"raw/fred/{series_id}/meta/{mc['fingerprint'][:16]}/{attempt_id}/{name}.json"
+            _write_new(out, rel, data)
+            rec["pages"].append(_page_entry(rel, data, retrieved, headers, http_status=status, name=name))
             if status != 200:
                 raise AttemptAborted(f"{name}: HTTP {status}")
-            got[name] = json.loads(data)
-        rel_id = _first(got["release"], "releases").get("id")
-        if rel_id is not None:
-            status, headers, data, retrieved = f.get(f"{API}/release/sources", {"release_id": str(rel_id), **rt})
-            rel = f"raw/fred/{series_id}/meta/{attempt_id}/sources.json"
-            _write_new(out / rel, data)
-            rec["pages"].append(_page_entry(rel, data, retrieved, headers, http_status=status))
-            got["sources"] = json.loads(data) if status == 200 else {}
-        s = _first(got["series"], "seriess")
-        r = _first(got["release"], "releases")
-        notes = s.get("notes") or ""
-        rec.update(status="ok", title=s.get("title"), units=s.get("units"),
-                   frequency=s.get("frequency"), seasonal_adjustment=s.get("seasonal_adjustment"),
-                   observation_start=s.get("observation_start"), observation_end=s.get("observation_end"),
-                   last_updated=s.get("last_updated"),
-                   release={"id": r.get("id"), "name": r.get("name"), "link": r.get("link")},
-                   sources=[{"name": x.get("name"), "link": x.get("link")}
-                            for x in (got.get("sources") or {}).get("sources", []) if isinstance(x, dict)],
-                   notes_sha256=_sha(notes.encode()),
-                   notes_mention_rights=any(w in notes.lower() for w in ("copyright", "©", "permission",
-                                                                           "license", "licence")))
-    except (AttemptAborted, BudgetExceeded, ImmutableConflict, ValueError, httpx.HTTPError) as exc:
+            bodies[name] = data
+        rec.update(status="ok", **derive_metadata(series_id, as_of, bodies))
+    except (AttemptAborted, BudgetExceeded, ImmutableConflict, PathEscape, SchemaError, ValueError,
+            httpx.HTTPError) as exc:
         rec.update(status="error", reason=redact(f"{type(exc).__name__}: {exc}"),
                    budget_stop=isinstance(exc, BudgetExceeded))
     rec["recorded_at_utc"] = _utc_now()
     return rec
 
 
+DERIVED_META = ("title", "units", "frequency", "seasonal_adjustment", "observation_start",
+                "observation_end", "last_updated", "release", "sources", "notes_sha256",
+                "notes_mention_rights")
+
+
+def check_metadata(out: Path, rec: dict, series_id: str, as_of: str) -> tuple[bool, str]:
+    mc = meta_contract(series_id, as_of)
+    if rec.get("status") != "ok":
+        return False, "metadata status not ok"
+    if rec.get("contract") != mc or rec.get("fingerprint") != mc["fingerprint"]:
+        return False, "metadata contract/fingerprint mismatch"
+    bodies = {}
+    for pg in rec.get("pages") or []:
+        if pg.get("http_status") != 200 or not _hash_ok(out, pg):
+            return False, f"metadata page invalid: {pg.get('path')}"
+        bodies[pg.get("name")] = _contained(out, pg["path"]).read_bytes()
+    try:
+        derived = derive_metadata(series_id, as_of, bodies)
+    except SchemaError as exc:
+        return False, f"metadata re-validation failed: {exc}"
+    if any(rec.get(k) != derived[k] for k in DERIVED_META):
+        return False, "stored metadata fields do not match the stored bytes"
+    return True, "ok"
+
+
 # --- verification ----------------------------------------------------------------------
 
 def _hash_ok(out: Path, pg: dict) -> bool:
-    p = out / pg["path"]
-    return p.is_file() and _sha(p.read_bytes()) == pg["sha256"]
+    try:
+        p = _contained(out, pg.get("path"))
+    except PathEscape:
+        return False
+    return p.is_file() and not p.is_symlink() and _sha(p.read_bytes()) == pg.get("sha256")
 
 
-def check_attempt(out: Path, rec: dict) -> tuple[bool, str]:
-    """Re-hash, re-validate and reconcile a staged attempt from its stored bytes."""
+def check_attempt(out: Path, rec: dict, expected: dict | None = None) -> tuple[bool, str]:
+    """Bind the record to its contract, then re-hash, re-validate and reconcile its pages."""
+    why = contract_problem(rec.get("contract"), expected)
+    if why:
+        return False, why
+    c = rec["contract"]
+    if (rec.get("fingerprint") != c["fingerprint"] or rec.get("series_id") != c["series_id"]
+            or rec.get("mode") != c["mode"]):
+        return False, "record identity does not match its contract"
     pages = rec.get("pages") or []
     if not pages:
         return False, "staged record has no pages"
@@ -550,11 +703,11 @@ def check_attempt(out: Path, rec: dict) -> tuple[bool, str]:
             if done:
                 return False, "pages after completion"
             if not _hash_ok(out, pg):
-                return False, f"hash mismatch or missing: {pg['path']}"
-            facts = validate_page(json.loads((out / pg["path"]).read_bytes()), offset=seq.offset,
-                                  params=(rec.get("contract") or {}).get("params"))
+                return False, f"hash mismatch, missing or escaping path: {pg.get('path')}"
+            facts = validate_page(json.loads(_contained(out, pg["path"]).read_bytes()),
+                                  offset=seq.offset, params=c["params"])
             done = seq.add(facts)
-    except (SchemaError, AttemptAborted, ValueError) as exc:
+    except (SchemaError, AttemptAborted, PathEscape, ValueError) as exc:
         return False, f"{type(exc).__name__}: {exc}"
     if not done:
         return False, f"incomplete: {seq.offset} of {seq.count} rows"
@@ -563,11 +716,22 @@ def check_attempt(out: Path, rec: dict) -> tuple[bool, str]:
     return True, "ok"
 
 
-def completed(out: Path) -> set[str]:
-    """Fingerprints with a staged attempt that fully re-verifies."""
+def completed(out: Path, wanted: dict[str, dict]) -> set[str]:
+    """Fingerprints of ``wanted`` contracts with a staged attempt that fully re-verifies."""
     recs, _ = read_manifest(out)
-    return {r["fingerprint"] for r in recs
-            if r.get("kind") == "attempt" and r.get("status") == "staged" and check_attempt(out, r)[0]}
+    return {r.get("fingerprint") for r in recs
+            if r.get("kind") == "attempt" and r.get("status") == "staged"
+            and r.get("fingerprint") in wanted and check_attempt(out, r, wanted[r["fingerprint"]])[0]}
+
+
+def metadata_completed(out: Path, series_ids: Iterable[str], as_of: str) -> set[str]:
+    recs, _ = read_manifest(out)
+    ok = set()
+    for sid in series_ids:
+        if any(r.get("kind") == "metadata" and r.get("series_id") == sid
+               and check_metadata(out, r, sid, as_of)[0] for r in recs):
+            ok.add(sid)
+    return ok
 
 
 def verify(out: Path, run_id: str | None = None) -> dict:
@@ -577,41 +741,60 @@ def verify(out: Path, run_id: str | None = None) -> dict:
     res = {"ok": False, "run_id": None, "requested": 0, "complete": [], "missing": [],
            "active_invalid": [], "historical_integrity_failures": [], "quarantined_responses": 0,
            "aborted_attempts": 0, "manifest_corrupt_lines": bad_lines, "metadata_missing": [],
-           "rights_unreviewed": []}
+           "metadata_invalid": [], "rights_unreviewed": []}
     if run_id:
         runs = [r for r in runs if r.get("run_id") == run_id]
     if not runs:
         res["reason"] = "no run recorded" if not run_id else f"run {run_id} not found"
         return res
     run = runs[-1]
-    res["run_id"], res["requested"] = run["run_id"], len(run["requested"])
+    as_of = run.get("as_of")
+    requested = run.get("requested") or []
+    sids = list(dict.fromkeys(run.get("series") or [q.get("series_id") for q in requested]))
+    res.update(run_id=run.get("run_id"), requested=len(requested), series=len(sids),
+               metadata_only=bool(run.get("metadata_only")))
     attempts = [r for r in recs if r.get("kind") == "attempt"]
     active: dict[str, dict] = {}
     for r in attempts:
-        if r.get("status") == "staged":
+        if r.get("status") == "staged" and isinstance(r.get("fingerprint"), str):
             active[r["fingerprint"]] = r  # newest staged attempt wins
         res["quarantined_responses"] += len(r.get("quarantine") or [])
         res["aborted_attempts"] += r.get("status") == "aborted"
-    for q in run["requested"]:
-        label = f"{q['series_id']}/{q['mode']}"
-        a = active.get(q["fingerprint"])
+    for q in requested:
+        label = f"{q.get('series_id')}/{q.get('mode')}"
+        try:
+            exp = contract(q["series_id"], q["mode"], as_of)
+        except (KeyError, TypeError, ValueError, SchemaError) as exc:
+            res["active_invalid"].append(f"{label}: requested identity invalid ({exc})")
+            continue
+        if q.get("fingerprint") != exp["fingerprint"]:
+            res["active_invalid"].append(f"{label}: requested fingerprint does not match its contract")
+            continue
+        a = active.get(exp["fingerprint"])
         if a is None:
             res["missing"].append(label)
             continue
-        ok, why = check_attempt(out, a)
+        ok, why = check_attempt(out, a, exp)
         (res["complete"] if ok else res["active_invalid"]).append(label if ok else f"{label}: {why}")
-    active_ids = {a["attempt_id"] for a in active.values()}
+    active_ids = {a.get("attempt_id") for a in active.values()}
     for r in attempts:
-        if r["attempt_id"] in active_ids:
+        if r.get("attempt_id") in active_ids:
             continue
         for pg in r.get("pages") or []:
             if not _hash_ok(out, pg):
-                res["historical_integrity_failures"].append(pg["path"])
-    meta = {r["series_id"]: r for r in recs if r.get("kind") == "metadata" and r.get("status") == "ok"}
-    sids = sorted({q["series_id"] for q in run["requested"]})
-    res["metadata_missing"] = [s for s in sids if s not in meta]
-    res["rights_unreviewed"] = [s for s in sids if meta.get(s, {}).get("rights_status") != "reviewed"]
-    res["ok"] = not res["missing"] and not res["active_invalid"] and res["requested"] > 0
+                res["historical_integrity_failures"].append(pg.get("path"))
+    metas = [r for r in recs if r.get("kind") == "metadata"]
+    for sid in sids:
+        mine = [r for r in metas if r.get("series_id") == sid]
+        if not mine:
+            res["metadata_missing"].append(sid)
+            continue
+        checks = [check_metadata(out, r, sid, as_of) for r in mine]
+        if not any(ok for ok, _ in checks):
+            res["metadata_invalid"].append(f"{sid}: {checks[-1][1]}")
+        res["rights_unreviewed"].append(sid)  # no automated rights review exists
+    res["ok"] = (bool(sids) and not res["missing"] and not res["active_invalid"]
+                 and not res["metadata_missing"] and not res["metadata_invalid"])
     return res
 
 
@@ -630,80 +813,105 @@ def code_identity() -> dict:
 
 
 def _refuse_out(out: Path) -> None:
+    if out.is_symlink():
+        raise SystemExit(f"{out} is a symlink; give the real staging directory")
     parts = set(out.resolve().parts)
     if {"inputs", "g2"} & parts:
         raise SystemExit(f"{out} looks like a G2 input/report path; staging must stay separate from G2")
-    if out.exists() and any(out.rglob("*.duckdb")):
-        raise SystemExit(f"{out} contains a .duckdb file; staging must be separate from any warehouse")
+    if out.exists():
+        for p in out.rglob("*"):
+            if p.is_symlink():
+                raise SystemExit(f"{p} is a symlink inside the staging directory; refusing")
+            if p.suffix == ".duckdb":
+                raise SystemExit(f"{out} contains a .duckdb file; staging must be separate from any warehouse")
 
 
 def run(series_ids: Iterable[str], *, out: Path, api_key: str, modes: Iterable[str] = MODES,
         as_of: str | None = None, config_sha256: str | None = None,
+        rights_clearance: str | None = None, metadata_only: bool = False,
         client: httpx.Client | None = None, budget: Budget | None = None,
         clock=time.monotonic, sleep=time.sleep, metadata: bool = True) -> dict:
+    """Stage metadata and, only with a recorded rights/intended-use clearance, observations.
+
+    AB-021 item 6: FRED's API terms restrict storage, archiving and ML training use. The
+    tool therefore refuses observation downloads unless ``rights_clearance`` names the
+    clearance record (e.g. an exchange-060 entry); ``metadata_only`` stages metadata only.
+    """
     out = Path(out)
-    _refuse_out(out)
-    out.mkdir(parents=True, exist_ok=True)
-    as_of = as_of or default_as_of()
-    modes = list(modes)
+    modes = [] if metadata_only else list(modes)
     for m in modes:
         if m not in MODES:
             raise SystemExit(f"unknown mode {m!r}; choose from {list(MODES)}")
-    series_ids = [safe_id(s) for s in series_ids]
+    if modes and not (isinstance(rights_clearance, str) and rights_clearance.strip()):
+        raise SystemExit("observation downloads need a recorded rights/intended-use clearance "
+                         "(rights_clearance); use metadata_only for discovery")
+    if not metadata and not modes:
+        raise SystemExit("nothing to do: metadata disabled and no observation modes")
+    _refuse_out(out)
+    as_of = as_of or default_as_of()
+    _iso(as_of, "as_of")
+    series_ids = list(dict.fromkeys(safe_id(s) for s in series_ids))
     contracts = [contract(s, m, as_of) for s in series_ids for m in modes]
     budget = budget or Budget()
+    out.mkdir(parents=True, exist_ok=True)
     own = client is None
     client = client or httpx.Client(timeout=60.0, follow_redirects=True)
     fetcher = Fetcher(client, api_key, budget, clock, sleep)
     run_id = _new_id("run")
     summary = {"run_id": run_id, "as_of": as_of, "staged": [], "skipped": [], "aborted": [],
-               "metadata_errors": [], "stopped": None}
+               "metadata_staged": [], "metadata_skipped": [], "metadata_errors": [], "stopped": None}
     try:
         with writer_lock(out):
-            done = completed(out)
+            done = completed(out, {c["fingerprint"]: c for c in contracts})
+            meta_done = metadata_completed(out, series_ids, as_of) if metadata else set(series_ids)
             _append_manifest(out, {
                 "kind": "run_start", "run_id": run_id, "started_at_utc": _utc_now(), "as_of": as_of,
                 "schema_version": SCHEMA_VERSION, "code": code_identity(),
                 "config_sha256": config_sha256 or _sha(_canon(series_ids)),
+                "rights_clearance": rights_clearance, "metadata_only": metadata_only,
                 "budget": {"max_requests": budget.max_requests, "max_bytes": budget.max_bytes,
                            "min_interval_s": budget.min_interval_s},
+                "series": series_ids,
                 "requested": [{"series_id": c["series_id"], "mode": c["mode"],
                                "fingerprint": c["fingerprint"]} for c in contracts]})
-            meta_done: set[str] = set()
-            for c in contracts:
-                label = f"{c['series_id']}/{c['mode']}"
-                if c["fingerprint"] in done:
-                    summary["skipped"].append(label)
-                    continue
-                try:
-                    if metadata and c["series_id"] not in meta_done:
-                        meta_done.add(c["series_id"])
-                        m = fetch_metadata(fetcher, c["series_id"], as_of, out=out, run_id=run_id)
-                        _append_manifest(out, m)
-                        if m["status"] != "ok":
-                            summary["metadata_errors"].append(f"{c['series_id']}: {m['reason']}")
-                            if m.get("budget_stop"):
-                                summary["stopped"] = m["reason"]
-                                break
-                    rec = fetch_series_mode(fetcher, c, out=out, run_id=run_id)
-                except BudgetExceeded as exc:  # before_request refused before any attempt began
-                    summary["stopped"] = str(exc)
+            for sid in series_ids:
+                if summary["stopped"]:
                     break
-                _append_manifest(out, rec)
-                if rec["status"] == "staged":
-                    oh, vh = rec["observation_history"], rec["vintage_history"]
-                    summary["staged"].append(f"{label} rows={rec['rows']} obs {oh['min']}..{oh['max']} "
-                                             f"realtime_start {vh['realtime_start_min']}..{vh['realtime_start_max']}")
+                if sid in meta_done:
+                    summary["metadata_skipped"].append(sid)
                 else:
-                    summary["aborted"].append(f"{label}: {rec['reason']}")
-                    if rec.get("budget_stop"):
-                        summary["stopped"] = rec["reason"]
-                        break
+                    m = fetch_metadata(fetcher, sid, as_of, out=out, run_id=run_id)
+                    _append_manifest(out, m)
+                    if m["status"] == "ok":
+                        summary["metadata_staged"].append(sid)
+                    else:
+                        summary["metadata_errors"].append(f"{sid}: {m['reason']}")
+                        if m.get("budget_stop"):
+                            summary["stopped"] = m["reason"]
+                            break
+                for c in (c for c in contracts if c["series_id"] == sid):
+                    label = f"{sid}/{c['mode']}"
+                    if c["fingerprint"] in done:
+                        summary["skipped"].append(label)
+                        continue
+                    rec = fetch_series_mode(fetcher, c, out=out, run_id=run_id)
+                    _append_manifest(out, rec)
+                    if rec["status"] == "staged":
+                        oh, vh = rec["observation_history"], rec["vintage_history"]
+                        summary["staged"].append(
+                            f"{label} rows={rec['rows']} obs {oh['min']}..{oh['max']} "
+                            f"realtime_start {vh['realtime_start_min']}..{vh['realtime_start_max']}")
+                    else:
+                        summary["aborted"].append(f"{label}: {rec['reason']}")
+                        if rec.get("budget_stop"):
+                            summary["stopped"] = rec["reason"]
+                            break
             summary["requests"], summary["bytes"] = budget.requests, budget.bytes
             _append_manifest(out, {"kind": "run_end", "run_id": run_id, "ended_at_utc": _utc_now(),
                                    **{k: summary[k] for k in ("requests", "bytes", "stopped")},
                                    "n_staged": len(summary["staged"]), "n_skipped": len(summary["skipped"]),
-                                   "n_aborted": len(summary["aborted"])})
+                                   "n_aborted": len(summary["aborted"]),
+                                   "n_metadata_errors": len(summary["metadata_errors"])})
     finally:
         if own:
             client.close()
@@ -724,12 +932,15 @@ def fred_series_from_sources(config: Path) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m datahoover.history.fred_backfill")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    r = sub.add_parser("run", help="stage full history and vintages")
+    r = sub.add_parser("run", help="stage metadata and (with a rights clearance) history and vintages")
     g = r.add_mutually_exclusive_group(required=True)
     g.add_argument("--series", help="comma-separated FRED series ids")
     g.add_argument("--from-sources", type=Path, help="sources.toml: every fred_series block")
     r.add_argument("--out", type=Path, required=True)
     r.add_argument("--modes", default="latest,vintages")
+    r.add_argument("--metadata-only", action="store_true")
+    r.add_argument("--rights-clearance", default=None,
+                   help="reference to the recorded rights/intended-use clearance (required for observations)")
     r.add_argument("--as-of", default=None, help="realtime cutoff YYYY-MM-DD (default: yesterday UTC)")
     r.add_argument("--max-requests", type=int, default=400)
     r.add_argument("--max-mb", type=int, default=1024)
@@ -742,23 +953,36 @@ def main(argv: list[str] | None = None) -> int:
         res = verify(a.out, a.run_id)
         print(json.dumps(res, indent=2))
         return 0 if res["ok"] else 1
+    # Validate every control before reading a secret or writing anything (AB-021 item 4).
+    if not math.isfinite(a.min_interval) or a.min_interval < 0.5:
+        print("--min-interval must be finite and >= 0.5 s (documented 120 requests/minute)", file=sys.stderr)
+        return 2
+    if a.max_requests < 0 or a.max_mb < 0:
+        print("--max-requests and --max-mb must be >= 0", file=sys.stderr)
+        return 2
+    modes = [m.strip() for m in a.modes.split(",") if m.strip()]
+    if not a.metadata_only and not (a.rights_clearance or "").strip():
+        print("observation downloads need --rights-clearance <recorded clearance>; "
+              "or use --metadata-only", file=sys.stderr)
+        return 2
+    try:
+        budget = Budget(max_requests=a.max_requests, max_bytes=a.max_mb * 1024 * 1024,
+                        min_interval_s=a.min_interval)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     from ..env import get_secret
     key = get_secret("FRED_API_KEY")
     if not key:
         print("FRED_API_KEY missing (env or DataHoover .env)", file=sys.stderr)
-        return 2
-    if a.min_interval < 0.5:
-        print("--min-interval below 0.5 s would exceed the documented 120 requests/minute", file=sys.stderr)
         return 2
     if a.from_sources:
         ids, cfg = fred_series_from_sources(a.from_sources), _sha(a.from_sources.read_bytes())
     else:
         ids, cfg = [s.strip() for s in a.series.split(",") if s.strip()], None
     try:
-        res = run(ids, out=a.out, api_key=key, modes=[m.strip() for m in a.modes.split(",") if m.strip()],
-                  as_of=a.as_of, config_sha256=cfg,
-                  budget=Budget(max_requests=a.max_requests, max_bytes=a.max_mb * 1024 * 1024,
-                                min_interval_s=a.min_interval))
+        res = run(ids, out=a.out, api_key=key, modes=modes, as_of=a.as_of, config_sha256=cfg,
+                  rights_clearance=a.rights_clearance, metadata_only=a.metadata_only, budget=budget)
     except LockHeld as exc:
         print(str(exc), file=sys.stderr)
         return 2

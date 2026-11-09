@@ -22,9 +22,9 @@ def _obs(n, rt="2026-11-08", start_year=1990):
 class Fake:
     """FRED-shaped fake: observations (limit/offset paging, echoes the query) and metadata."""
 
-    def __init__(self, total=5, page=None, fail=None, status=200, rows=None, mutate=None):
+    def __init__(self, total=5, page=None, fail=None, status=200, rows=None, mutate=None, meta=None):
         self.total, self.page, self.fail, self.status = total, page, fail or set(), status
-        self.rows, self.mutate, self.calls = rows, mutate, []
+        self.rows, self.mutate, self.calls, self.meta = rows, mutate, [], meta or {}
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         q = dict(request.url.params)
@@ -33,14 +33,19 @@ class Fake:
         sid = q.get("series_id")
         if sid in self.fail:
             return httpx.Response(self.status, json={"error_code": self.status, "error_message": "nope"})
+        for suffix, resp in self.meta.items():
+            if path.endswith(suffix):
+                return resp
+        rt = {"realtime_start": q.get("realtime_start"), "realtime_end": q.get("realtime_end")}
         if path.endswith("/series"):
             return httpx.Response(200, json={"seriess": [{
-                "id": sid, "title": f"T {sid}", "units": "Dollars per Barrel", "frequency": "Daily",
+                **rt, "id": sid, "title": f"T {sid}", "units": "Dollars per Barrel", "frequency": "Daily",
                 "seasonal_adjustment": "Not Seasonally Adjusted", "observation_start": "1986-01-02",
                 "observation_end": "2026-11-02", "last_updated": "2026-11-05 15:00:00-06",
                 "notes": "Copyright, 2026, Example Supplier."}]})
         if path.endswith("/series/release"):
-            return httpx.Response(200, json={"releases": [{"id": 15, "name": "Spot Prices", "link": "https://x"}]})
+            return httpx.Response(200, json={"releases": [{**rt, "id": 15, "name": "Spot Prices",
+                                                           "link": "https://x"}]})
         if path.endswith("/release/sources"):
             return httpx.Response(200, json={"sources": [{"name": "EIA", "link": "https://www.eia.gov"}]})
         rows = self.rows if self.rows is not None else _obs(self.total, q["realtime_end"])
@@ -49,7 +54,7 @@ class Fake:
         body = {"realtime_start": q["realtime_start"], "realtime_end": q["realtime_end"],
                 "observation_start": q["observation_start"], "observation_end": q["observation_end"],
                 "units": q["units"], "output_type": int(q["output_type"]), "file_type": "json",
-                "order_by": q["order_by"], "sort_order": q["sort_order"], "count": len(rows),
+                "order_by": "observation_date", "sort_order": q["sort_order"], "count": len(rows),
                 "offset": off, "limit": int(q["limit"]), "observations": rows[off:off + lim]}
         if self.mutate:
             body = self.mutate(body, off)
@@ -66,8 +71,14 @@ class Fake:
 def _run(tmp_path, fake, ids=("GNPCA",), **kw):
     budget = kw.pop("budget", fb.Budget(min_interval_s=0))
     kw.setdefault("as_of", AS_OF)
+    kw.setdefault("rights_clearance", "test-clearance")
     return fb.run(ids, out=tmp_path, api_key=KEY, client=fake.client(), budget=budget,
                   clock=lambda: 0.0, sleep=lambda s: None, **kw)
+
+
+def _obs_ok(v):
+    """Observation completeness only (these tests run with metadata disabled)."""
+    return v["requested"] > 0 and not v["missing"] and not v["active_invalid"]
 
 
 def _attempts(out):
@@ -214,11 +225,11 @@ def test_tamper_then_refetch_keeps_history_and_active_is_valid(tmp_path):
     (tmp_path / bad).chmod(0o644)
     (tmp_path / bad).write_bytes(b"tampered")
     v = fb.verify(tmp_path)
-    assert not v["ok"] and v["active_invalid"][0].startswith("B/latest")
+    assert not _obs_ok(v) and v["active_invalid"][0].startswith("B/latest")
     res = _run(tmp_path, fake, ids=("A", "B"), modes=["latest"], metadata=False)
     assert res["skipped"] == ["A/latest"] and len(res["staged"]) == 1
     v = fb.verify(tmp_path)
-    assert v["ok"] and v["historical_integrity_failures"] == [bad]
+    assert _obs_ok(v) and v["historical_integrity_failures"] == [bad]
     assert (tmp_path / bad).read_bytes() == b"tampered"  # evidence kept, not deleted
 
 
@@ -243,7 +254,7 @@ def test_budget_stop_then_resume_completes(tmp_path):
     assert fb.verify(tmp_path)["missing"] == ["C/latest"]
     res = _run(tmp_path, fake, ids=("A", "B", "C"), modes=["latest"], metadata=False)
     assert sorted(res["skipped"]) == ["A/latest", "B/latest"] and len(res["staged"]) == 1
-    assert fb.verify(tmp_path)["ok"]
+    assert _obs_ok(fb.verify(tmp_path))
 
 
 # --- defect 5: semantics ------------------------------------------------------------------------
@@ -270,7 +281,7 @@ def test_negative_price_and_missing_marker_are_valid(tmp_path):
     res = _run(tmp_path, Fake(rows=rows), ids=("DCOILWTICO",), modes=["latest"], metadata=False)
     assert len(res["staged"]) == 1
     (rec,) = _attempts(tmp_path)
-    assert rec["n_missing_marker"] == 1 and fb.verify(tmp_path)["ok"]
+    assert rec["n_missing_marker"] == 1 and _obs_ok(fb.verify(tmp_path))
 
 
 def test_integer_fields_strict():
@@ -287,9 +298,9 @@ def test_integer_fields_strict():
 
 def test_no_clobber_create(tmp_path):
     p = tmp_path / "a.json"
-    fb._write_new(p, b"one")
+    fb._write_new(tmp_path, "a.json", b"one")
     with pytest.raises(fb.ImmutableConflict):
-        fb._write_new(p, b"one")
+        fb._write_new(tmp_path, "a.json", b"one")
     assert p.read_bytes() == b"one" and [x.name for x in tmp_path.iterdir()] == ["a.json"]
 
 
@@ -322,7 +333,7 @@ def test_torn_manifest_tail_is_preserved_and_skipped(tmp_path):
     res = _run(tmp_path, Fake(total=2), ids=("A", "B"), modes=["latest"], metadata=False)
     assert res["skipped"] == ["A/latest"] and len(res["staged"]) == 1
     v = fb.verify(tmp_path)
-    assert v["ok"] and len(v["manifest_corrupt_lines"]) == 1
+    assert _obs_ok(v) and len(v["manifest_corrupt_lines"]) == 1
 
 
 def test_refuses_warehouse_and_g2_dirs_and_unsafe_ids(tmp_path):
@@ -355,3 +366,122 @@ def test_cli_verify_empty_fails_and_missing_key(tmp_path, monkeypatch):
     monkeypatch.delenv("FRED_API_KEY", raising=False)
     monkeypatch.setattr("datahoover.env._load_env_file", lambda: {})
     assert fb.main(["run", "--series", "X", "--out", str(tmp_path)]) == 2
+
+
+# --- AB-021 regressions -------------------------------------------------------------------------
+
+def test_metadata_empty_or_failed_sources_is_an_error_and_verify_fails(tmp_path):
+    res = _run(tmp_path, Fake(total=2, meta={"/series": httpx.Response(200, json={})}),
+               ids=("A",), modes=["latest"])
+    assert res["metadata_errors"] and len(res["staged"]) == 1
+    v = fb.verify(tmp_path)
+    assert not v["ok"] and v["metadata_invalid"] and v["complete"] == ["A/latest"]
+    res = _run(tmp_path / "b", Fake(total=2, meta={"/release/sources": httpx.Response(500, json={})}),
+               ids=("A",), modes=["latest"])
+    assert res["metadata_errors"] and not fb.verify(tmp_path / "b")["ok"]
+
+
+def test_metadata_identity_and_asof_must_match(tmp_path):
+    bad = httpx.Response(200, json={"seriess": [{"id": "OTHER", "title": "t", "units": "u", "frequency": "f",
+                                                  "seasonal_adjustment": "s", "realtime_start": AS_OF,
+                                                  "realtime_end": AS_OF}]})
+    res = _run(tmp_path, Fake(total=2, meta={"/series": bad}), ids=("A",), modes=["latest"])
+    assert "OTHER" in res["metadata_errors"][0]
+
+
+def test_metadata_tamper_fails_verify_and_resume_repairs_metadata(tmp_path):
+    fake = Fake(total=2)
+    _run(tmp_path, fake, ids=("A",), modes=["latest"])
+    assert fb.verify(tmp_path)["ok"]
+    m = next(r for r in fb.read_manifest(tmp_path)[0] if r.get("kind") == "metadata")
+    (tmp_path / m["pages"][0]["path"]).write_bytes(b"{}")
+    v = fb.verify(tmp_path)
+    assert not v["ok"] and v["metadata_invalid"][0].startswith("A:")
+    n_obs = len(fake.obs_calls())
+    res = _run(tmp_path, fake, ids=("A",), modes=["latest"])
+    assert res["skipped"] == ["A/latest"] and res["metadata_staged"] == ["A"]
+    assert len(fake.obs_calls()) == n_obs and fb.verify(tmp_path)["ok"]
+
+
+def test_fingerprint_is_bound_to_contract(tmp_path):
+    _run(tmp_path, Fake(total=2), ids=("A",), modes=["latest"], metadata=False)
+    att = _attempts(tmp_path)[0]
+    no_contract = {k: v for k, v in att.items() if k != "contract"}
+    fb._append_manifest(tmp_path, {**no_contract, "attempt_id": "att-x"})
+    assert not fb.verify(tmp_path)["ok"]
+    out2 = tmp_path / "b"
+    _run(out2, Fake(total=2), ids=("A",), modes=["latest"], metadata=False)
+    att = _attempts(out2)[0]
+    c = json.loads(json.dumps(att["contract"]))
+    c["series_id"] = c["params"]["series_id"] = "WRONG"
+    fb._append_manifest(out2, {**att, "attempt_id": "att-y", "contract": c})
+    v = fb.verify(out2)
+    assert not v["ok"] and "contract" in v["active_invalid"][0]
+
+
+def test_required_echoes_and_row_window(tmp_path):
+    def strip(body, off):
+        for k in fb.ECHO_PINNED:
+            body.pop(k, None)
+        return body
+    res = _run(tmp_path, Fake(total=2, mutate=strip), ids=("A",), modes=["latest"], metadata=False)
+    assert not res["staged"] and "echo" in res["aborted"][0]
+    rows = [{"realtime_start": "2027-01-01", "realtime_end": "2027-01-01", "date": "2020-01-01", "value": "1"}]
+    res = _run(tmp_path / "b", Fake(rows=rows), ids=("A",), modes=["latest"], metadata=False)
+    assert not res["staged"] and "outside requested" in res["aborted"][0]
+    assert "order_by" not in fb.contract("A", "latest", AS_OF)["params"]
+
+
+@pytest.mark.parametrize("kw", [{"min_interval_s": float("nan")}, {"min_interval_s": -1.0},
+                                {"min_interval_s": float("inf")}, {"max_bytes": float("nan")},
+                                {"max_requests": -1}, {"max_requests": True}, {"max_bytes": 1.5}])
+def test_budget_rejects_invalid_controls(kw):
+    with pytest.raises(ValueError):
+        fb.Budget(**kw)
+
+
+def test_cli_rejects_nan_interval_before_secret(tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr("datahoover.env.get_secret", lambda n: called.append(n) or "k")
+    assert fb.main(["run", "--series", "X", "--out", str(tmp_path / "o"), "--min-interval", "nan",
+                    "--rights-clearance", "r"]) == 2
+    assert fb.main(["run", "--series", "X", "--out", str(tmp_path / "o"), "--max-requests", "-1",
+                    "--rights-clearance", "r"]) == 2
+    assert not called and not (tmp_path / "o").exists()
+
+
+def test_symlink_escape_and_absolute_manifest_paths_rejected(tmp_path):
+    g2dir = tmp_path / "g2x"
+    g2dir.mkdir()
+    out = tmp_path / "stage"
+    out.mkdir()
+    (out / "raw").symlink_to(g2dir)
+    with pytest.raises(SystemExit):
+        _run(out, Fake(total=2), ids=("A",), modes=["latest"], metadata=False)
+    with pytest.raises(fb.PathEscape):
+        fb._write_new(out, "raw/x.json", b"1")
+    assert not any(g2dir.iterdir())
+    out2 = tmp_path / "stage2"
+    _run(out2, Fake(total=2), ids=("A",), modes=["latest"], metadata=False)
+    att = _attempts(out2)[0]
+    ext = tmp_path / "ext.json"
+    ext.write_bytes((out2 / att["pages"][0]["path"]).read_bytes())
+    for bad in (str(ext), "../ext.json"):
+        pages = [{**att["pages"][0], "path": bad}]
+        fb._append_manifest(out2, {**att, "attempt_id": f"att-{len(bad)}", "pages": pages})
+        assert not fb.verify(out2)["ok"]
+
+
+def test_rights_gate_and_metadata_only(tmp_path):
+    with pytest.raises(SystemExit):
+        fb.run(["A"], out=tmp_path / "a", api_key=KEY, as_of=AS_OF, client=Fake().client(),
+               budget=fb.Budget(min_interval_s=0), clock=lambda: 0.0, sleep=lambda s: None)
+    assert not (tmp_path / "a").exists()
+    fake = Fake(total=2)
+    res = fb.run(["A"], out=tmp_path / "m", api_key=KEY, as_of=AS_OF, metadata_only=True,
+                 client=fake.client(), budget=fb.Budget(min_interval_s=0),
+                 clock=lambda: 0.0, sleep=lambda s: None)
+    assert res["metadata_staged"] == ["A"] and fake.obs_calls() == []
+    v = fb.verify(tmp_path / "m")
+    assert v["ok"] and v["requested"] == 0 and v["metadata_only"] and v["rights_unreviewed"] == ["A"]
+    assert fb.main(["run", "--series", "A", "--out", str(tmp_path / "c")]) == 2
