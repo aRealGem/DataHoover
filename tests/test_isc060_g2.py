@@ -1,10 +1,12 @@
-"""ISC-060 G2 contenders: SYNTHETIC correctness and behaviour tests only.
+"""ISC-060 G2 contenders (g2-0.2): SYNTHETIC correctness and behaviour tests only.
 
 Nothing here is evidence of predictive skill on market data (AB-007, AB-014).
 """
 
 from __future__ import annotations
 
+import copy
+import json
 import math
 import random
 from datetime import date, timedelta
@@ -172,42 +174,220 @@ def test_ridge_abstains_without_enough_training():
     assert qs is None and "training samples" in why
 
 
-# --- pairing and dev records ----------------------------------------------------------
+# --- AB-018 item 1: matched rows, window --------------------------------------------
 
-def _rec(origin, name, *, status="ok", q=0.0, y=0.0, contract=None, maturity="mature"):
+def _grid_on(days, vals):
+    return list(zip(days, vals))
+
+
+def test_training_window_is_exactly_trail_n_start_positions():
+    r = g2.train_positions(1000, 5)
+    assert len(r) == spec.TRAIL_N and r[-1] == 1000 - 1 - 5
+    rng = random.Random(4)
+    vals = _prices([rng.gauss(0, 0.01) for _ in range(600)])
+    res = g2.ridge_models(_grid(vals), 5)
+    assert res["R0"][1] is None and res["R0"][2]["n_train"] == spec.TRAIL_N
+
+
+def test_x_ablation_fits_identical_rows_with_missing_x_unequal_calendar_m5():
+    own, xg = _xy(11, n=700)
+    # X starts late (no X for early rows) and skips every 9th print (different calendar)
+    xg = [p for i, p in enumerate(xg) if i > 520 and i % 9]
+    res = g2.ridge_models(own, 5, [xg, xg])
+    r0, r0m, rx = res["R0"], res["R0m"], res["RX"]
+    assert r0m[1] is None and rx[1] is None, (r0m[1], rx[1])
+    assert r0m[2]["train_rows_sha256"] == rx[2]["train_rows_sha256"]
+    assert r0m[2]["cal_rows_sha256"] == rx[2]["cal_rows_sha256"]
+    assert r0m[2]["n_train"] == rx[2]["n_train"] < r0[2]["n_train"] <= spec.TRAIL_N
+
+
+# --- AB-018 calibration ---------------------------------------------------------------
+
+def test_ridge_q50_is_point_plus_median_residual_not_mean():
+    """90% zero and 10% +0.1 increments: mean ~0.01, median 0. q50 must follow the median."""
+    rng = random.Random(9)
+    vals = _prices([0.1 if rng.random() < 0.1 else 0.0 for _ in range(600)])
+    qs, why = g2.ridge_direct(_grid(vals), 1)
+    assert why is None and abs(qs[0.5]) < 0.004
+
+
+def test_calibration_blocks_use_only_matured_labels(monkeypatch):
+    m, seen = 5, []
+    real = g2.ridge_fit
+
+    def spy(X, y, alpha=g2.RIDGE_ALPHA):
+        seen.append(max(int(r[0]) for r in X))
+        return real(X, y, alpha)
+    monkeypatch.setattr(g2, "ridge_fit", spy)
+    rng = random.Random(1)
+    rows = [(j, [float(j), rng.gauss(0, 1)], rng.gauss(0, 1)) for j in range(300)]
+    dates = _days(400)
+    qs, why, meta = g2._calibrated(rows, [300.0, 0.0], m, dates, "T")
+    assert why is None and meta["n_cal"] == g2.CAL_N
+    cal = rows[-g2.CAL_N:]
+    starts = [cal[b][0] for b in range(0, g2.CAL_N, g2.CAL_BLOCK)]
+    for mx, st in zip(seen[:-1], starts):
+        assert mx + m <= st
+    assert seen[-1] == 299                                   # final fit uses every row
+
+
+# --- AB-018 item 3: dependence, calendar ------------------------------------------------
+
+def test_interval_overlap_uses_actual_lagged_windows():
+    lagged = [(date(2026, 4, 28), date(2026, 5, 8)), (date(2026, 5, 5), date(2026, 5, 15)),
+              (date(2026, 5, 12), date(2026, 5, 22))]
+    assert g2.interval_overlap(lagged) == 2 and g2.nonoverlapping_count(lagged) == 2
+    clean = [(date(2026, 5, 4), date(2026, 5, 8)), (date(2026, 5, 11), date(2026, 5, 15))]
+    assert g2.interval_overlap(clean) == 1 and g2.nonoverlapping_count(clean) == 2
+
+
+def test_bootstrap_blocks_never_cross_calendar_gaps():
+    o = [date(2026, 1, 3) + timedelta(weeks=w) for w in (0, 1, 2, 5, 6, 9)]
+    assert g2.spans(o) == [[0, 1, 2], [3, 4], [5]]
+    xs = [0.0, 0.0, 0.0, 10.0, 10.0, 5.0]
+    lo, hi = g2.span_block_bootstrap_ci(xs, o, block=3)
+    assert 0.0 <= lo <= hi <= 10.0
+
+
+# --- pairing (fail closed) and the carry rule --------------------------------------------
+
+def _rec(origin, name, *, status="ok", q=0.0, y=0.0, contract=None, maturity="mature",
+         cell="wti_r1", group="exploratory", anchor=None, target=None):
     qs = {k: q for k in spec.QUANTILES} if status == "ok" else None
-    return replay.Record(origin=origin, group="exploratory", cell_id="wti_r1", baseline=name,
-                         status=status, quantiles=qs, y_first=y, maturity=maturity,
-                         contract=contract or {"target": str(origin)})
+    return g2.G2Record(origin=origin, group=group, cell_id=cell, baseline=name,
+                       status=status, quantiles=qs, y_first=y, y_latest=y, maturity=maturity,
+                       contract=contract or {"target": str(origin)},
+                       anchor_date=anchor or origin - timedelta(days=3),
+                       target_date=target or origin + timedelta(days=3))
 
 
 def test_paired_scores_only_common_cohort_and_reports_the_rest():
     o = [date(2026, 1, 3) + timedelta(weeks=i) for i in range(5)]
     recs = [_rec(o[0], "B0", q=0.1), _rec(o[0], "A1", q=0.0),            # common: A1 better
-            _rec(o[1], "B0"), _rec(o[1], "A1", status="abstain"),        # abstain
-            _rec(o[2], "B0"), _rec(o[2], "A1", contract={"target": "x"}),  # contract mismatch
+            _rec(o[1], "B0", q=0.1), _rec(o[1], "A1", q=0.05),           # common: A1 better
+            _rec(o[2], "B0"), _rec(o[2], "A1", status="abstain"),        # abstain
             _rec(o[3], "B0", maturity="missing"), _rec(o[3], "A1", maturity="missing"),
             _rec(o[4], "B0", status="excluded"), _rec(o[4], "A1", status="excluded")]
     (row,) = g2.paired(recs, ("B0", "A1"))
     assert (row["n_origins"], row["n_common"], row["n_excluded"], row["n_not_mature"],
-            row["n_contract_mismatch"], row["n_abstain"]["A1"]) == (5, 1, 1, 1, 1, 1)
-    assert row["mean_diff"] < 0 and row["frac_b_better"] == 1.0
-    assert row["evidence_class"] == "exploratory"
+            row["n_abstain"]["A1"]) == (5, 2, 1, 1, 1)
+    assert row["mean_diff"] < 0 and row["frac_contender_better"] == 1.0
+    assert row["mean_loss"]["B0"] > row["mean_loss"]["A1"] > 0
+    assert row["loss_change"] == pytest.approx((row["mean_loss"]["A1"] - row["mean_loss"]["B0"])
+                                               / row["mean_loss"]["B0"])
+    assert len(row["per_origin"]) == 2 and "cov80" in row["per_origin"][0]["a"]
+    assert row["coverage"]["A1"]["cov95"] in (0.0, 0.5, 1.0) and row["evidence_class"] == "exploratory"
 
 
-def test_dev_records_never_touch_sealed_origins(built):  # noqa: F811
-    recs = g2.dev_records(built["panel"])
-    assert recs and not any(r.origin in spec.SEALED_ORIGINS for r in recs)
-    assert {r.baseline for r in recs} == {"B0", "A1", "R0", "RX"}
-    # contenders share each origin's G1 target contract
+@pytest.mark.parametrize("bad", ["duplicate", "maturity", "outcome", "contract", "nonfinite",
+                                 "missing", "purge"])
+def test_paired_fails_closed(bad):
+    o = date(2026, 1, 3)
+    a, b = _rec(o, "B0"), _rec(o, "A1")
+    recs = [a, b]
+    if bad == "duplicate":
+        recs.append(_rec(o, "A1"))
+    elif bad == "maturity":
+        b.maturity = "immature"
+    elif bad == "outcome":
+        b.y_first = 0.5
+    elif bad == "contract":
+        b.contract = {"target": "x"}
+    elif bad == "nonfinite":
+        b.quantiles = {**b.quantiles, 0.5: float("nan")}
+    elif bad == "missing":
+        recs = [a]
+    elif bad == "purge":
+        b.status = "purged"
+    with pytest.raises(g2.PairingError):
+        g2.paired(recs, ("B0", "A1"))
+
+
+def _pair_rows(track, exp_change, obs_change, cells=None):
+    cells = cells or (g2.TRACK_A_CELLS if track == "A" else g2.TRACK_B_CELLS)
+    out = {}
+    for a, b, _ in g2.PAIRS[track]:
+        rows = [{"group": "exploratory", "cell_id": c, "loss_change": exp_change} for c in cells]
+        if obs_change is not None:
+            rows += [{"group": "observed", "cell_id": c, "loss_change": obs_change} for c in cells]
+        out[f"{b}-vs-{a}"] = rows
+    return out
+
+
+def test_carry_rule_exact_conditions():
+    assert g2.carry_decision("A", _pair_rows("A", -0.05, 0.0))["carry"] is True
+    assert g2.carry_decision("A", _pair_rows("A", -0.05, 0.06))["carry"] is False   # guard
+    assert g2.carry_decision("B", _pair_rows("B", -0.05, None))["carry"] is False   # not assessable
+    assert g2.carry_decision("B", _pair_rows("B", 0.01, -0.1))["carry"] is False    # no wins
+    few = _pair_rows("A", -0.05, 0.0, cells=g2.TRACK_A_CELLS[:3])                   # 3/8 decidable
+    d = g2.carry_decision("A", few)
+    assert d["carry"] is False and d["comparators"]["B0"]["conditions"][0] is False
+
+
+# --- dev records on the synthetic warehouse ------------------------------------------------
+
+@pytest.fixture(scope="module")
+def dev(built):  # noqa: F811
+    return g2.dev_records(built["panel"])
+
+
+def test_dev_records_never_touch_sealed_origins_and_purge_boundary(dev):
+    assert dev and not any(r.origin in spec.SEALED_ORIGINS for r in dev)
+    assert {r.baseline for r in dev} == {"B0", "B1", "A1", "R0", "R0m", "RX", "R0mL", "RXL"}
+    for r in dev:
+        if r.target_date is not None and r.target_date >= g2.PURGE_FROM:
+            assert r.status == "purged"
+        if r.status == "ok":
+            assert r.target_date < g2.PURGE_FROM
     by = {}
-    for r in recs:
+    for r in dev:
         if r.contract:
-            by.setdefault((r.origin, r.cell_id), set()).add(str(r.contract))
+            by.setdefault((r.origin, r.cell_id), set()).add(json.dumps(r.contract, sort_keys=True))
     assert all(len(v) == 1 for v in by.values())
+    rx = [r for r in dev if r.baseline == "RX" and r.status == "ok"]
+    assert rx and all(set(r.meta["feature_snapshots"]) == {"wti", "brent", "hh"} for r in rx)
 
 
-def test_dev_cli_refuses_until_frozen(tmp_path, built):  # noqa: F811
-    path, _ = data.write_extract(built["blob"], tmp_path)
-    assert g2.main(["dev", "--extract", str(path), "--out", str(tmp_path / "r.json")]) == 2
-    assert not (tmp_path / "r.json").exists()
+def test_report_is_auditable(dev):
+    rep = g2.report(dev, extract_sha="x", code={"code_head": "h"}, env={"python": "3"})
+    assert set(rep["decision"]) == {"A", "B"} and "RX-vs-R0m" in rep["pairs_y_first"]
+    assert "RX-vs-R0m" in rep["sensitivity_y_latest"] and rep["records"]
+    assert rep["limits"]["holdout"].startswith("origin-level sealing")
+    json.dumps(rep, default=str)
+
+
+def test_observed_forecasts_ignore_later_revisions_of_earlier_dates(built):  # noqa: F811
+    panel = built["panel"]
+    _, obs = replay.build_origins(panel)
+    origin = next(o for o in obs if o not in spec.SEALED_ORIGINS)
+    cell = next(c for c in spec.CELLS if c.cell_id == "wti_r1")
+    cutoff = data.as_of(panel)
+    a = {r.baseline: r.quantiles for r in g2.contender_records(panel, cell, origin, "observed",
+                                                               cutoff=cutoff)}
+    mutated = copy.deepcopy(panel)
+    iss = replay.issuance(origin)
+    for snaps in mutated.snaps.values():
+        for s in snaps.values():
+            if s.available_at is not None and s.available_at > iss:
+                s.values = {d: v * 1.7 for d, v in s.values.items()}
+    b = {r.baseline: r.quantiles for r in g2.contender_records(mutated, cell, origin, "observed",
+                                                               cutoff=cutoff)}
+    assert a == b
+
+
+def test_dev_cli_refusals_and_single_trial(tmp_path, built, dev, monkeypatch):  # noqa: F811
+    path, sha = data.write_extract(built["blob"], tmp_path)
+    args = ["dev", "--extract", str(path), "--workdir", str(tmp_path)]
+    assert g2.main(args) == 2                                             # not frozen
+    monkeypatch.setattr(g2, "G2_FROZEN", True)
+    assert g2.main(args) == 2                                             # wrong extract
+    monkeypatch.setattr(g2, "EXPECTED_EXTRACT_SHA256", sha)
+    from datahoover.isc060 import run as g1run
+    monkeypatch.setattr(g1run, "code_identity", lambda: {"code_head": "abc", "code_dirty": False,
+                                                         "code_tree_sha256": "t"})
+    monkeypatch.setattr(g1run, "env_inventory", lambda wd: "e")
+    monkeypatch.setattr(g2, "dev_records", lambda panel: dev)
+    assert g2.main(args) == 0
+    out = tmp_path / "g2" / f"{g2.TRIAL_ID}.json"
+    assert json.loads(out.read_text())["trial_id"] == g2.TRIAL_ID
+    assert g2.main(args) == 2                                             # one registered trial
