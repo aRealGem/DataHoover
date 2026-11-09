@@ -1,4 +1,4 @@
-"""ISC-060 G2 contenders (AB-007 tracks A and B), DRAFT g2-0.2 (AB-018 revision). Pure stdlib.
+"""ISC-060 G2 contenders (AB-007 tracks A and B), DRAFT g2-0.3 (AB-018 + AB-021 revisions). Pure stdlib.
 
 G1 (spec 1.0, frozen) is not changed: this module reuses its calendar, info-set,
 plan and outcome code read-only and adds paired tracks on the same target contracts.
@@ -74,7 +74,7 @@ from statistics import pvariance
 from . import baselines as bl
 from . import data, replay, scoring, spec
 
-G2_VERSION = "g2-0.2-draft"
+G2_VERSION = "g2-0.3-draft"
 G2_FROZEN = False            # dev comparison refuses until pre-registered + frozen
 TRIAL_ID = "isc060-g2-dev-1"  # the ONE registered development trial
 EXPECTED_EXTRACT_SHA256 = "86ac22569807a43956cb8226a213cadc93a1d011061e50a3174df12619e84e42"
