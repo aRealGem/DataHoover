@@ -1,4 +1,4 @@
-"""ISC-060 G2 contenders (AB-007 tracks A and B), DRAFT g2-0.3 (AB-018 + AB-021 revisions). Pure stdlib.
+"""ISC-060 G2 contenders (AB-007 tracks A and B), DRAFT g2-0.4 (AB-018 + AB-021 revisions; AB-024 doc fixes). Pure stdlib.
 
 G1 (spec 1.0, frozen) is not changed: this module reuses its calendar, info-set,
 plan and outcome code read-only and adds paired tracks on the same target contracts.
@@ -74,7 +74,7 @@ from statistics import pvariance
 from . import baselines as bl
 from . import data, replay, scoring, spec
 
-G2_VERSION = "g2-0.3-draft"
+G2_VERSION = "g2-0.4-draft"
 G2_FROZEN = False            # dev comparison refuses until pre-registered + frozen
 TRIAL_ID = "isc060-g2-dev-1"  # the ONE registered development trial
 EXPECTED_EXTRACT_SHA256 = "86ac22569807a43956cb8226a213cadc93a1d011061e50a3174df12619e84e42"
@@ -88,8 +88,10 @@ X_KEYS = {"wti": ("brent", "hh"), "brent": ("wti", "hh"), "hh": ("wti", "brent")
 TRACK_A_CELLS = ("wti_r1", "wti_r5", "brent_r1", "brent_r5", "hh_r1", "hh_r5",
                  "gas_w1", "gas_w4")
 TRACK_B_CELLS = ("wti_r1", "wti_r5", "brent_r1", "brent_r5", "hh_r1", "hh_r5")
-# Earliest start of any sealed target interval: first sealed origin minus the maximum
-# admissible snapshot age and one more week of lag allowance.
+# Fixed outcome cutoff: target dates on or after this are purged from development
+# scoring (first sealed origin minus the snapshot-age limit and one week). It is a
+# fixed date, not the earliest start of any sealed interval, and it gives no
+# shared-increment guarantee (AB-024).
 PURGE_FROM = spec.SEALED_ORIGINS[0] - timedelta(days=spec.STALE_DAYS + 7)
 # The one registered execution location for TRIAL_ID (AB-021 item 3).
 REGISTERED_WORKDIR = Path("/home/ccagent/isc060")
@@ -646,8 +648,9 @@ def report(recs: list, *, extract_sha: str, code: dict, env: dict) -> dict:
                               "guarantee); not an untouched chronological "
                               "period; G1 already reported boundary-crossing outcomes",
                    "evidence": "exploratory screening; intervals descriptive; no skill or calibration claim",
-                   "power": "no power or MDE analysis; seven observed origins cannot substantiate "
-                            "or rule out an effect"},
+                   "power": "no power or MDE analysis; the post-purge observed sample is sparse "
+                            "(per-cell n_common in pairs_y_first) and cannot "
+                            "substantiate or rule out an effect"},
         "decision": {t: carry_decision(t, pairs) for t in PAIRS},
         "pairs_y_first": pairs, "sensitivity_y_latest": sens,
         "records": [asdict(r) for r in recs],

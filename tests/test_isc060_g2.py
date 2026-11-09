@@ -1,4 +1,4 @@
-"""ISC-060 G2 contenders (g2-0.3): SYNTHETIC correctness and behaviour tests only.
+"""ISC-060 G2 contenders (g2-0.4): SYNTHETIC correctness and behaviour tests only.
 
 Nothing here is evidence of predictive skill on market data (AB-007, AB-014).
 """
