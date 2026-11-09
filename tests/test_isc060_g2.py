@@ -241,12 +241,35 @@ def test_interval_overlap_uses_actual_lagged_windows():
     assert g2.interval_overlap(clean) == 1 and g2.nonoverlapping_count(clean) == 2
 
 
-def test_bootstrap_blocks_never_cross_calendar_gaps():
+def test_bootstrap_interval_omitted_for_fragmented_or_short_samples():
     o = [date(2026, 1, 3) + timedelta(weeks=w) for w in (0, 1, 2, 5, 6, 9)]
     assert g2.spans(o) == [[0, 1, 2], [3, 4], [5]]
-    xs = [0.0, 0.0, 0.0, 10.0, 10.0, 5.0]
-    lo, hi = g2.span_block_bootstrap_ci(xs, o, block=3)
-    assert 0.0 <= lo <= hi <= 10.0
+    ci, why = g2.span_block_bootstrap_ci([0.0, 0.0, 0.0, 10.0, 10.0, 5.0], o, block=3)
+    assert ci is None and "3 separate spans" in why
+    # AB-021 diagnostic: ten zeros + one isolated 100 (spans [10, 1]) gets no interval
+    o2 = [date(2026, 1, 3) + timedelta(weeks=w) for w in list(range(10)) + [12]]
+    ci, why = g2.span_block_bootstrap_ci([0.0] * 10 + [100.0], o2, block=4)
+    assert ci is None
+    o3 = [date(2026, 1, 3) + timedelta(weeks=w) for w in range(8)]
+    ci, why = g2.span_block_bootstrap_ci([1.0] * 8, o3, block=3)
+    assert ci is None and "< 3 x block 3" in why
+
+
+def test_circular_bootstrap_keeps_equal_weights_on_one_span():
+    o = [date(2026, 1, 3) + timedelta(weeks=w) for w in range(12)]
+    xs = [0.0] * 11 + [100.0]
+    ci, why = g2.span_block_bootstrap_ci(xs, o, block=4, b=4000)
+    assert why == "ok" and ci[0] <= sum(xs) / 12 <= ci[1]
+    # each origin has equal expected weight: resampled mean centres on the sample mean
+    import random as _r
+    rng, n, means = _r.Random(1), 12, []
+    for _ in range(4000):
+        smp = []
+        for _ in range(3):
+            st = rng.randrange(n)
+            smp += [xs[(st + j) % n] for j in range(4)]
+        means.append(sum(smp[:n]) / n)
+    assert abs(sum(means) / len(means) - sum(xs) / n) < 0.5
 
 
 # --- pairing (fail closed) and the carry rule --------------------------------------------
@@ -380,6 +403,12 @@ def test_dev_cli_refusals_and_single_trial(tmp_path, built, dev, monkeypatch):  
     args = ["dev", "--extract", str(path), "--workdir", str(tmp_path)]
     assert g2.main(args) == 2                                             # not frozen
     monkeypatch.setattr(g2, "G2_FROZEN", True)
+    assert g2.main(args) == 2                                             # unregistered workdir
+    other = tmp_path / "other"
+    other.mkdir()
+    monkeypatch.setattr(g2, "REGISTERED_WORKDIR", tmp_path)
+    assert g2.main(["dev", "--extract", str(path), "--workdir", str(other)]) == 2
+    monkeypatch.setattr(g2, "G2_FROZEN", True)
     assert g2.main(args) == 2                                             # wrong extract
     monkeypatch.setattr(g2, "EXPECTED_EXTRACT_SHA256", sha)
     from datahoover.isc060 import run as g1run
@@ -391,3 +420,5 @@ def test_dev_cli_refusals_and_single_trial(tmp_path, built, dev, monkeypatch):  
     out = tmp_path / "g2" / f"{g2.TRIAL_ID}.json"
     assert json.loads(out.read_text())["trial_id"] == g2.TRIAL_ID
     assert g2.main(args) == 2                                             # one registered trial
+    (tmp_path / "g2" / f"{g2.TRIAL_ID}.json").unlink()                     # crash: lock, no report
+    assert g2.main(args) == 2                                             # spent, no retry

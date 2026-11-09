@@ -31,11 +31,24 @@ aligned by reference date, NOT by per-training-date release vintages. So "releas
 holds at the outer origin; for historical training rows it is a reference-date
 reconstruction. RXL is the conservative lag sensitivity.
 
-Holdout boundary (AB-018 item 3): sealed origins are never built. In addition, a
-development forecast whose target date is on or after PURGE_FROM is purged, so no
-development outcome shares price increments with sealed target intervals. This is
-origin-level sealing plus an outcome purge; it is NOT an untouched chronological
-final period, and G1 already reported some boundary-crossing outcomes.
+Holdout boundary (AB-018 item 3, AB-021 item 2): sealed origins are never built, and
+a development forecast whose target date is on or after PURGE_FROM is purged. This is
+a FIXED OUTCOME CUTOFF. It does NOT guarantee that no development outcome shares
+price increments with a sealed target interval: the information-set check bounds
+snapshot age, not the age of a sealed record's anchor, so a sealed interval can start
+before PURGE_FROM. Together with origin-level sealing and G1's earlier boundary-
+crossing reports, the holdout is not an untouched chronological period.
+
+One trial (AB-021 item 3): the CLI runs only in REGISTERED_WORKDIR and refuses if
+that path holds the trial's lock or report, so the code enforces once per registered
+path. A lock without a report means the trial is SPENT (failed): there is no retry
+under the same or a new id without a new registered version recorded on exchange-060
+first, whatever the partial output showed.
+
+Uncertainty intervals (AB-021 item 1): a circular block bootstrap is reported only
+when all common origins form ONE contiguous weekly span with n >= MIN_BLOCKS_FOR_CI x
+block length; otherwise the interval is omitted with a reason. Intervals are
+descriptive and never feed the carry rule.
 
 Comparisons are PAIRED and fail closed (duplicate keys, unequal anchors, contracts or
 outcomes, asymmetric maturity, missing or non-finite quantiles raise PairingError).
@@ -54,7 +67,7 @@ import platform
 import random
 import sys
 from dataclasses import asdict, dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from statistics import pvariance
 
@@ -78,6 +91,9 @@ TRACK_B_CELLS = ("wti_r1", "wti_r5", "brent_r1", "brent_r5", "hh_r1", "hh_r5")
 # Earliest start of any sealed target interval: first sealed origin minus the maximum
 # admissible snapshot age and one more week of lag allowance.
 PURGE_FROM = spec.SEALED_ORIGINS[0] - timedelta(days=spec.STALE_DAYS + 7)
+# The one registered execution location for TRIAL_ID (AB-021 item 3).
+REGISTERED_WORKDIR = Path("/home/ccagent/isc060")
+MIN_BLOCKS_FOR_CI = 3
 
 # (comparator, contender, role); "decision" pairs feed the carry rule, the rest are reported only.
 PAIRS = {
@@ -328,7 +344,8 @@ def interval_overlap(intervals: list[tuple[date, date]]) -> int:
 
 
 def nonoverlapping_count(intervals: list[tuple[date, date]]) -> int:
-    """Greedy count of mutually non-overlapping intervals (a floor on independent windows)."""
+    """Greedy count of mutually non-overlapping intervals. Not an effective sample size:
+    non-overlapping returns can still be serially dependent."""
     n, last_end = 0, None
     for s, e in sorted(intervals, key=lambda x: x[1]):
         if last_end is None or s >= last_end:
@@ -350,27 +367,27 @@ def spans(origins: list[date]) -> list[list[int]]:
 def span_block_bootstrap_ci(xs: list[float], origins: list[date], *, block: int,
                             b: int = scoring.BOOT_B, seed: int = scoring.BOOT_SEED,
                             alpha: float = 0.10):
-    """Moving-block bootstrap of the mean whose blocks never cross a gap in the
-    common-origin calendar; a span shorter than the block is one block."""
+    """Circular block bootstrap of the mean on ONE contiguous span, so every origin
+    has equal expected weight. Returns (interval or None, reason). Fragmented
+    calendars or too few blocks give no interval (AB-021 item 1)."""
     n = len(xs)
-    if n < 2:
-        return None
-    blocks = []
-    for sp in spans(origins):
-        if len(sp) <= block:
-            blocks.append(sp)
-        else:
-            blocks += [sp[s:s + block] for s in range(len(sp) - block + 1)]
+    sp = spans(origins)
+    if len(sp) != 1:
+        return None, f"common origins fall in {len(sp)} separate spans; no interval"
+    if block < 1 or n < MIN_BLOCKS_FOR_CI * block:
+        return None, f"n={n} < {MIN_BLOCKS_FOR_CI} x block {block}; no interval"
     rng = random.Random(seed)
+    k = math.ceil(n / block)
     means = []
     for _ in range(b):
         sample: list[float] = []
-        while len(sample) < n:
-            sample.extend(xs[i] for i in rng.choice(blocks))
+        for _ in range(k):
+            st = rng.randrange(n)
+            sample.extend(xs[(st + j) % n] for j in range(block))
         means.append(sum(sample[:n]) / n)
     means.sort()
     return (means[int(math.floor(alpha / 2 * (b - 1)))],
-            means[int(math.ceil((1 - alpha / 2) * (b - 1)))])
+            means[int(math.ceil((1 - alpha / 2) * (b - 1)))]), "ok"
 
 
 # --- paired comparison ------------------------------------------------------------
@@ -450,7 +467,7 @@ def paired(records, pair: tuple[str, str], *, value: str = "y_first") -> list[di
             ors = [date.fromisoformat(p["origin"]) for p in pr]
             ov = interval_overlap(ivs)
             blk = min(n, max(ov, math.ceil(n ** (1 / 3))))
-            ci = span_block_bootstrap_ci(diffs, ors, block=blk)
+            ci, ci_reason = span_block_bootstrap_ci(diffs, ors, block=blk)
             row.update({
                 "mean_loss": {a_name: la, b_name: lb}, "mean_diff": lb - la,
                 "loss_change": (lb - la) / la if la > 0 else None,
@@ -458,7 +475,7 @@ def paired(records, pair: tuple[str, str], *, value: str = "y_first") -> list[di
                 "interval_overlap": ov, "block_length": blk,
                 "spans": [len(s) for s in spans(ors)],
                 "nonoverlapping_windows": nonoverlapping_count(ivs),
-                "mean_diff_ci90_descriptive": ci,
+                "mean_diff_ci90_descriptive": ci, "ci_status": ci_reason,
                 # Half-width of a descriptive interval; NOT a minimum detectable effect
                 # (no declared alternative, power target or validated method; AB-018).
                 "ci90_half_width_descriptive": None if ci is None else (ci[1] - ci[0]) / 2,
@@ -625,7 +642,8 @@ def report(recs: list, *, extract_sha: str, code: dict, env: dict) -> dict:
                        "x_lag_sensitivity_days": X_LAG_SENSITIVITY_DAYS, "purge_from": str(PURGE_FROM)},
         "limits": {"release_alignment": "outer-origin snapshot; historical X rows aligned by reference "
                                         "date within it, not per-training-date vintages",
-                   "holdout": "origin-level sealing plus outcome purge; not an untouched chronological "
+                   "holdout": "origin-level sealing plus a fixed outcome cutoff (no shared-increment "
+                              "guarantee); not an untouched chronological "
                               "period; G1 already reported boundary-crossing outcomes",
                    "evidence": "exploratory screening; intervals descriptive; no skill or calibration claim",
                    "power": "no power or MDE analysis; seven observed origins cannot substantiate "
@@ -646,6 +664,10 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     if not G2_FROZEN:
         print(f"REFUSED: {G2_VERSION} is not frozen (pre-register on exchange-060 first).",
+              file=sys.stderr)
+        return 2
+    if Path(args.workdir).resolve() != REGISTERED_WORKDIR.resolve():
+        print(f"REFUSED: {TRIAL_ID} is registered to run only in {REGISTERED_WORKDIR}.",
               file=sys.stderr)
         return 2
     out = Path(args.workdir) / "g2" / f"{TRIAL_ID}.json"
@@ -671,7 +693,9 @@ def main(argv=None) -> int:
         print(f"REFUSED: trial {TRIAL_ID} already started ({lock}).", file=sys.stderr)
         return 2
     with os.fdopen(fd, "w") as fh:
-        fh.write(json.dumps({"trial_id": TRIAL_ID, "code": code, "extract_sha256": sha}))
+        fh.write(json.dumps({"trial_id": TRIAL_ID, "code": code, "extract_sha256": sha,
+                             "started_at_utc": datetime.now(timezone.utc).isoformat(),
+                             "policy": "lock without report = trial spent; no retry"}))
     env = {"python": platform.python_version(),
            "env_inventory_sha256": g1run.env_inventory(Path(args.workdir))}
     rep = report(dev_records(data.load_extract(blob)), extract_sha=sha, code=code, env=env)
