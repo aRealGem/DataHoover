@@ -47,7 +47,8 @@ class Fake:
             return httpx.Response(200, json={"releases": [{**rt, "id": 15, "name": "Spot Prices",
                                                            "link": "https://x"}]})
         if path.endswith("/release/sources"):
-            return httpx.Response(200, json={"sources": [{"name": "EIA", "link": "https://www.eia.gov"}]})
+            return httpx.Response(200, json={**rt, "sources": [{**rt, "id": 1, "name": "EIA",
+                                                                "link": "https://www.eia.gov"}]})
         rows = self.rows if self.rows is not None else _obs(self.total, q["realtime_end"])
         off = int(q.get("offset", 0))
         lim = min(int(q["limit"]), self.page or 10**9)
@@ -113,7 +114,8 @@ def test_metadata_and_rights_recorded_unreviewed(tmp_path):
     (m,) = [r for r in fb.read_manifest(tmp_path)[0] if r.get("kind") == "metadata"]
     assert m["status"] == "ok" and m["title"] == "T GNPCA" and m["units"] == "Dollars per Barrel"
     assert m["frequency"] == "Daily" and m["release"]["name"] == "Spot Prices"
-    assert m["sources"] == [{"name": "EIA", "link": "https://www.eia.gov"}]
+    assert m["sources"] == [{"id": 1, "name": "EIA", "link": "https://www.eia.gov",
+                             "realtime_start": AS_OF, "realtime_end": AS_OF}]
     assert m["rights_status"] == "unreviewed" and m["notes_mention_rights"] is True
     v = fb.verify(tmp_path)
     assert v["ok"] and v["rights_unreviewed"] == ["GNPCA"] and not v["metadata_missing"]
@@ -485,3 +487,78 @@ def test_rights_gate_and_metadata_only(tmp_path):
     v = fb.verify(tmp_path / "m")
     assert v["ok"] and v["requested"] == 0 and v["metadata_only"] and v["rights_unreviewed"] == ["A"]
     assert fb.main(["run", "--series", "A", "--out", str(tmp_path / "c")]) == 2
+
+
+# --- AB-024 residuals -------------------------------------------------------------------
+
+def _src_resp(env_rt, src_rt, name="wrong-era source"):
+    return httpx.Response(200, json={"realtime_start": env_rt[0], "realtime_end": env_rt[1],
+                                     "sources": [{"id": 9, "name": name, "realtime_start": src_rt[0],
+                                                  "realtime_end": src_rt[1]}]})
+
+
+@pytest.mark.parametrize("env_rt,src_rt", [
+    (("1900-01-01", "1900-01-01"), ("1900-01-01", "1900-01-01")),   # AB-024 exact repro
+    ((AS_OF, AS_OF), ("1900-01-01", "1900-01-01")),                 # source interval disjoint
+    ((AS_OF, AS_OF), (None, None)),                                 # source interval missing
+    ((None, None), (AS_OF, AS_OF)),                                 # envelope missing
+])
+def test_release_sources_realtime_must_match_as_of(tmp_path, env_rt, src_rt):
+    _run(tmp_path, Fake(total=2, meta={"/release/sources": _src_resp(env_rt, src_rt)}))
+    v = fb.verify(tmp_path)
+    assert not v["ok"] and v["metadata_invalid"]
+
+
+def test_release_sources_interval_containing_as_of_is_accepted(tmp_path):
+    _run(tmp_path, Fake(total=2, meta={"/release/sources": _src_resp((AS_OF, AS_OF),
+                                                                    ("2020-01-01", "9999-12-31"))}))
+    assert fb.verify(tmp_path)["ok"]
+
+
+def test_derive_metadata_rejects_disjoint_sources_directly():
+    rt = {"realtime_start": AS_OF, "realtime_end": AS_OF}
+    bodies = {"series": json.dumps({"seriess": [{**rt, "id": "A", "title": "t", "units": "u",
+                                                 "frequency": "D", "seasonal_adjustment": "NSA"}]}).encode(),
+              "release": json.dumps({"releases": [{**rt, "id": 1, "name": "r"}]}).encode(),
+              "sources": json.dumps({"realtime_start": "1900-01-01", "realtime_end": "1900-01-01",
+                                     "sources": [{"name": "s", "realtime_start": "1900-01-01",
+                                                  "realtime_end": "1900-01-01"}]}).encode()}
+    with pytest.raises(fb.SchemaError):
+        fb.derive_metadata("A", AS_OF, bodies)
+
+
+def test_empty_modes_without_metadata_only_is_refused(tmp_path):
+    fake = Fake(total=2)
+    with pytest.raises(SystemExit):
+        _run(tmp_path, fake, modes=[])
+    assert fake.calls == []
+
+
+def test_verify_fails_observation_run_with_no_requests(tmp_path):
+    # A manifest written by an older tool (or by hand) that records an observation run
+    # with nothing requested must not verify as a success.
+    _run(tmp_path, Fake(total=2), metadata_only=True)
+    man = tmp_path / "manifest.jsonl"
+    lines = [json.loads(x) for x in man.read_text().splitlines() if x.strip()]
+    for r in lines:
+        if r.get("kind") == "run_start":
+            r["metadata_only"] = False
+    man.write_text("".join(json.dumps(r) + "\n" for r in lines))
+    v = fb.verify(tmp_path)
+    assert not v["ok"] and v["requested"] == 0 and "no requested observations" in v["reason"]
+
+
+def test_cli_empty_modes_refused_before_secret(tmp_path, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("secret read")
+    import datahoover.env as env
+    monkeypatch.setattr(env, "get_secret", boom)
+    rc = fb.main(["run", "--series", "A", "--out", str(tmp_path / "o"), "--modes", "",
+                  "--rights-clearance", "x"])
+    assert rc == 2 and not (tmp_path / "o").exists()
+
+
+def test_metadata_only_still_verifies(tmp_path):
+    _run(tmp_path, Fake(total=2), metadata_only=True)
+    v = fb.verify(tmp_path)
+    assert v["ok"] and v["metadata_only"] and v["requested"] == 0

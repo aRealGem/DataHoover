@@ -92,7 +92,7 @@ import httpx
 
 from ..redact import redact
 
-TOOL_VERSION = "fred-backfill-0.3"
+TOOL_VERSION = "fred-backfill-0.4"
 SCHEMA_VERSION = 3
 API = "https://api.stlouisfed.org/fred"
 ENDPOINT = f"{API}/series/observations"
@@ -592,7 +592,8 @@ def derive_metadata(series_id: str, as_of: str, bodies: dict[str, bytes]) -> dic
     try:
         s = _items(json.loads(bodies["series"]), "seriess", "series")[0]
         r = _items(json.loads(bodies["release"]), "releases", "series/release")[0]
-        srcs = _items(json.loads(bodies["sources"]), "sources", "release/sources")
+        src_env = json.loads(bodies["sources"])
+        srcs = _items(src_env, "sources", "release/sources")
     except KeyError as exc:
         raise SchemaError(f"metadata response {exc} missing") from None
     except ValueError as exc:
@@ -605,6 +606,21 @@ def derive_metadata(series_id: str, as_of: str, bodies: dict[str, bytes]) -> dic
         if d.get("realtime_start") != as_of or d.get("realtime_end") != as_of:
             raise SchemaError(f"{what} realtime {d.get('realtime_start')}..{d.get('realtime_end')} "
                               f"!= as_of {as_of}")
+    # AB-024 residual 1: release/sources carries realtime_start/realtime_end on the
+    # envelope and on each source (https://fred.stlouisfed.org/docs/api/fred/release_sources.html).
+    # Fail-closed contract chosen here: the envelope must equal as_of and every source's
+    # interval must be present and contain as_of.
+    if src_env.get("realtime_start") != as_of or src_env.get("realtime_end") != as_of:
+        raise SchemaError(f"release/sources realtime {src_env.get('realtime_start')}.."
+                          f"{src_env.get('realtime_end')} != as_of {as_of}")
+    for x in srcs:
+        a, b = x.get("realtime_start"), x.get("realtime_end")
+        if not (isinstance(a, str) and isinstance(b, str)):
+            raise SchemaError("source: missing realtime interval")
+        _iso(a, "source realtime_start")
+        _iso(b, "source realtime_end")
+        if not (a <= as_of <= b):
+            raise SchemaError(f"source {x.get('name')!r} realtime {a}..{b} excludes as_of {as_of}")
     notes = s.get("notes") if isinstance(s.get("notes"), str) else ""
     return {"title": _need_str(s, "title", "series"), "units": _need_str(s, "units", "series"),
             "frequency": _need_str(s, "frequency", "series"),
@@ -613,8 +629,10 @@ def derive_metadata(series_id: str, as_of: str, bodies: dict[str, bytes]) -> dic
             "last_updated": s.get("last_updated"),
             "release": {"id": _int(r.get("id"), "release id"), "name": _need_str(r, "name", "release"),
                         "link": r.get("link") if isinstance(r.get("link"), str) else None},
-            "sources": [{"name": _need_str(x, "name", "source"),
-                         "link": x.get("link") if isinstance(x.get("link"), str) else None} for x in srcs],
+            "sources": [{"id": x.get("id"), "name": _need_str(x, "name", "source"),
+                         "link": x.get("link") if isinstance(x.get("link"), str) else None,
+                         "realtime_start": x["realtime_start"], "realtime_end": x["realtime_end"]}
+                        for x in srcs],
             "notes_sha256": _sha(notes.encode()),
             "notes_mention_rights": any(w in notes.lower() for w in
                                         ("copyright", "©", "permission", "license", "licence"))}
@@ -793,7 +811,9 @@ def verify(out: Path, run_id: str | None = None) -> dict:
         if not any(ok for ok, _ in checks):
             res["metadata_invalid"].append(f"{sid}: {checks[-1][1]}")
         res["rights_unreviewed"].append(sid)  # no automated rights review exists
-    res["ok"] = (bool(sids) and not res["missing"] and not res["active_invalid"]
+    if not res["metadata_only"] and not requested:
+        res["reason"] = "observation run recorded with no requested observations"
+    res["ok"] = (bool(sids) and (res["metadata_only"] or bool(requested)) and not res["missing"] and not res["active_invalid"]
                  and not res["metadata_missing"] and not res["metadata_invalid"])
     return res
 
@@ -839,6 +859,9 @@ def run(series_ids: Iterable[str], *, out: Path, api_key: str, modes: Iterable[s
     """
     out = Path(out)
     modes = [] if metadata_only else list(modes)
+    if not metadata_only and not modes:
+        # AB-024 residual 2: an observation run must request observations.
+        raise SystemExit("no observation modes given; pass metadata_only for a metadata-only run")
     for m in modes:
         if m not in MODES:
             raise SystemExit(f"unknown mode {m!r}; choose from {list(MODES)}")
@@ -961,6 +984,9 @@ def main(argv: list[str] | None = None) -> int:
         print("--max-requests and --max-mb must be >= 0", file=sys.stderr)
         return 2
     modes = [m.strip() for m in a.modes.split(",") if m.strip()]
+    if not a.metadata_only and not modes:
+        print("--modes is empty; give observation modes or use --metadata-only", file=sys.stderr)
+        return 2
     if not a.metadata_only and not (a.rights_clearance or "").strip():
         print("observation downloads need --rights-clearance <recorded clearance>; "
               "or use --metadata-only", file=sys.stderr)
