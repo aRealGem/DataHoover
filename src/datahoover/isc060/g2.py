@@ -74,8 +74,8 @@ from statistics import pvariance
 from . import baselines as bl
 from . import data, replay, scoring, spec
 
-G2_VERSION = "g2-0.4-draft"
-G2_FROZEN = False            # dev comparison refuses until pre-registered + frozen
+G2_VERSION = "g2-0.4"
+G2_FROZEN = True             # frozen 2026-11-10 for isc060-g2-dev-1 (FA-029/AB-031)
 TRIAL_ID = "isc060-g2-dev-1"  # the ONE registered development trial
 EXPECTED_EXTRACT_SHA256 = "86ac22569807a43956cb8226a213cadc93a1d011061e50a3174df12619e84e42"
 RIDGE_ALPHA = 1.0

@@ -401,6 +401,7 @@ def test_observed_forecasts_ignore_later_revisions_of_earlier_dates(built):  # n
 def test_dev_cli_refusals_and_single_trial(tmp_path, built, dev, monkeypatch):  # noqa: F811
     path, sha = data.write_extract(built["blob"], tmp_path)
     args = ["dev", "--extract", str(path), "--workdir", str(tmp_path)]
+    monkeypatch.setattr(g2, "G2_FROZEN", False)
     assert g2.main(args) == 2                                             # not frozen
     monkeypatch.setattr(g2, "G2_FROZEN", True)
     assert g2.main(args) == 2                                             # unregistered workdir
