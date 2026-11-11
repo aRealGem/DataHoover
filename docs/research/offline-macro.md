@@ -75,3 +75,28 @@ packages; frozen bundle loading, fixed-byte pins and research-only result writer
 were removed. This is not byte-identical recovery of every earlier experiment.
 No predictive skill, completeness of expected publication dates, or shared
 historical vintage is asserted by this PR.
+
+## Runnable offline BLS experiment
+
+The repository now has an explicit experiment consumer for the retained BLS v1
+capture format. It validates the three named input files, normalizes monthly
+records, computes exact-calendar changes, and emits deterministic JSON on stdout:
+
+```sh
+PYTHONPATH=src python -m datahoover.research.bls_experiment \
+  --input-schema bls-v1-capture \
+  --raw response.json --capture capture.json --request request.json
+```
+
+Each input is bounded to 2 MB. No network, warehouse, scheduler or input-file
+write occurs. Results retain absent slots, excluded annual records, coverage and
+source-bound feature endpoints. Redirect stdout only to an appropriate private
+local destination when using retained data; do not commit the result.
+
+This is **not** a live collector adapter. The current BLS connector uses v2 and
+stores reserialized payloads without this capture receipt; Treasury collectors
+store page lists and likewise lack the receipt fields. Do not synthesize those
+fields or relabel a v2 capture as v1 to pass validation. A collector-compatible
+adapter with truthful missing provenance remains a separate integration task.
+Synthetic end-to-end CLI tests verify the working offline path, deterministic
+output, input preservation, byte-tamper rejection and explicit v2 rejection.

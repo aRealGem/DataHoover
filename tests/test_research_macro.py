@@ -56,6 +56,19 @@ class MacroTests(unittest.TestCase):
     def test_panel_no_listwise_deletion(self):
         r=monthly_panel.build([bls(value='-'),bls('LNS14000000',value='-')],[interest()],'2001-01','2001-02')
         self.assertEqual(r[0]['numeric_cell_count'],1);self.assertEqual(r[1]['numeric_cell_count'],0);self.assertEqual(r[0]['cells']['cpi_u']['source_row']['footnotes'],[{'text':'synthetic missing'}])
+    def test_panel_z_timestamp_and_single_validation(self):
+        from unittest.mock import patch
+        row=bls()
+        row['capture_started_utc']='2001-03-01T00:00:00Z'
+        with patch.object(monthly_panel, 'validate_row', wraps=monthly_panel.validate_row) as validate:
+            result=monthly_panel.build([row], [], '2001-01', '2001-01')
+            self.assertEqual(validate.call_count, 1)
+            self.assertEqual(result[0]['numeric_cell_count'], 1)
+    def test_panel_reversed_mixed_timestamp_forms(self):
+        row=bls()
+        row['capture_started_utc']='2001-03-01T00:00:01Z'
+        with self.assertRaises(ValueError):
+            monthly_panel.build([row], [], '2001-01', '2001-01')
     def test_panel_duplicate(self):
         with self.assertRaises(ValueError):monthly_panel.build([bls(),bls()],[],'2001-01','2001-01')
     def test_panel_reversed(self):

@@ -3,7 +3,6 @@ import calendar
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
-from pathlib import Path
 import re
 
 SERIES = ("LNS14000000", "CUUR0000SA0")
